@@ -48,7 +48,13 @@ from localstack.utils.common import (
     run,
 )
 from localstack.utils.common import safe_requests as requests
-from localstack.utils.common import sleep_forever, start_thread, to_bytes, to_str, truncate
+from localstack.utils.common import (
+    sleep_forever,
+    start_thread,
+    to_bytes,
+    to_str,
+    truncate,
+)
 from localstack.utils.server.http2_server import HTTPErrorResponse
 
 LOG = logging.getLogger(__name__)
@@ -81,7 +87,6 @@ class ProxyListenerEdge(ProxyListener):
         self.health = HealthResource(self.service_manager)
 
     def forward_request(self, method, path, data, headers):
-
         if config.EDGE_FORWARD_URL:
             return do_forward_request_network(
                 0, method, path, data, headers, target_url=config.EDGE_FORWARD_URL
@@ -91,6 +96,20 @@ class ProxyListenerEdge(ProxyListener):
             return self.health.handle(method, path, data)
         if method == "POST" and path == "/graph":
             return serve_resource_graph(data)
+
+        # with open(f"/tmp/localstack/requests/r-{time.time()}-{short_uid()}.json", "w") as fd:
+        with open(f"/tmp/localstack/requests/requests.json", "a") as fd:
+            fd.write(
+                json.dumps(
+                    {
+                        "method": method,
+                        "path": path,
+                        "data": to_str(data),
+                        "headers": dict(headers),
+                    }
+                )
+            )
+            fd.write(os.linesep)
 
         # kill the process if we receive this header
         headers.get(HEADER_KILL_SIGNAL) and sys.exit(0)
