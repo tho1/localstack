@@ -1,6 +1,4 @@
-import json
-import os
-import pkgutil
+import io
 from typing import Dict, List, Set
 
 from botocore import xform_name
@@ -8,33 +6,33 @@ from botocore.model import (
     ListShape,
     MapShape,
     OperationModel,
-    ServiceModel,
     Shape,
     StringShape,
-    StructureShape,
+    StructureShape, ServiceModel,
 )
 from typing_extensions import OrderedDict
 
-from localstack.utils.common import camel_to_snake_case, first_char_to_upper
-
-
-def load_service(service: str, version: str) -> ServiceModel:
-    """
-    For example: load_service("sqs", "2012-11-05")
-    """
-    path = os.path.join("data", service, version, "service-2.json")
-    data = pkgutil.get_data("botocore", path)
-    service_description = json.loads(data)
-
-    return ServiceModel(service_description, service)
+from localstack.aws.spec import load_service
+from localstack.utils.common import camel_to_snake_case, snake_to_camel_case
 
 
 class ShapeNode:
+    service: ServiceModel
     shape: Shape
 
-    def __init__(self, shape: Shape) -> None:
+    def __init__(self, service: ServiceModel, shape: Shape) -> None:
         super().__init__()
+        self.service = service
         self.shape = shape
+
+    @property
+    def is_request(self):
+        for operation_name in self.service.operation_names:
+            operation = self.service.operation_model(operation_name)
+            if self.shape.name == operation.input_shape.name:
+                return True
+
+        return False
 
     @property
     def name(self) -> str:
@@ -50,6 +48,10 @@ class ShapeNode:
         return self.shape.type_name in ["integer", "boolean", "float", "double", "string"]
 
     @property
+    def is_enum(self):
+        return isinstance(self.shape, StringShape) and self.shape.enum
+
+    @property
     def dependencies(self) -> List[str]:
         shape = self.shape
 
@@ -62,7 +64,7 @@ class ShapeNode:
 
         return []
 
-    def print_declaration(self):
+    def print_declaration(self, output):
         code = ""
 
         shape = self.shape
@@ -72,7 +74,9 @@ class ShapeNode:
             members = ""
 
             if self.is_exception:
-                base = "Exception"
+                base = "ServiceException"
+            if self.is_request:
+                base = "ServiceRequest"
 
             if not shape.members:
                 members = "    pass"
@@ -87,7 +91,7 @@ class ShapeNode:
             code = f"{shape.name} = Dict[{shape.key.name}, {shape.value.name}]"
         elif isinstance(shape, StringShape):
             if shape.enum:
-                code += f"class {shape.name}(Enum):\n"
+                code += f"class {shape.name}(str):\n"
                 for v in shape.enum:
                     k = v.replace("-", "_")  # TODO: create a proper "enum_value_to_token" function
                     code += f'    {k} = "{v}"\n'
@@ -105,39 +109,57 @@ class ShapeNode:
         elif shape.type_name == "boolean":
             code = f"{shape.name} = bool"
         elif shape.type_name == "blob":
-            code = f"{shape.name} = bytes"
+            code = f"{shape.name} = bytes"  # FIXME check what type blob really is
         elif shape.type_name == "timestamp":
             code = f"{shape.name} = str"  # FIXME
         else:
             code = f"# unknown shape type for {shape.name}: {shape.type_name}"
+        # TODO: BoxedInteger?
 
-        print(code)
-        print()
+        output.write(code)
+        output.write("\n")
+
+    def get_order(self):
+        """
+        Defines a basic order in which to sort the stack of shape nodes before printing.
+        First all non-enum primitives are printed, then enums, then exceptions, then all other types.
+        """
+        if self.is_primitive:
+            if self.is_enum:
+                return 1
+            else:
+                return 0
+
+        if self.is_exception:
+            return 2
+
+        return 3
 
 
-def main():
-    service = load_service("sqs", "2012-11-05")
-    # service = load_service("comprehend", "2017-11-27")
-    # service = load_service("firehose", "2015-08-04")
-
-    code = ""
-    code += "from enum import Enum\n"
-    code += "from typing import Dict, List, TypedDict\n"
-    code += "\n"
-    print(code)
+def generate_service_types(output, service: ServiceModel):
+    output.write("from typing import Dict, List, TypedDict\n")
+    output.write("\n")
+    output.write("from localstack.aws.api import handler, RequestContext, ServiceException, ServiceRequest")
+    output.write("\n")
 
     # ==================================== print type declarations
     nodes: Dict[str, ShapeNode] = dict()
 
     for shape_name in service.shape_names:
         shape = service.shape_for(shape_name)
-        nodes[shape_name] = ShapeNode(shape)
+        nodes[shape_name] = ShapeNode(service, shape)
+
+    output.write("__all__ = [\n")
+    for name in nodes.keys():
+        output.write(f"    \"{name}\",\n")
+    output.write("]\n")
 
     printed: Set[str] = set()
     stack: List[str] = list(nodes.keys())
 
-    # then try the rest
-    stack.reverse()  # for alphabetical order
+    stack = sorted(stack, key=lambda name: nodes[name].get_order())
+    stack.reverse()
+
     while stack:
         name = stack.pop()
         if name in printed:
@@ -147,17 +169,23 @@ def main():
         dependencies = [dep for dep in node.dependencies if dep not in printed]
 
         if not dependencies:
-            node.print_declaration()
+            node.print_declaration(output)
             printed.add(name)
         else:
             stack.append(name)
             stack.extend(dependencies)
-            # TODO: circular dependencies
+            # TODO: circular dependencies (do they exist?)
 
-    # ================================================= print skeleton
 
-    class_name = first_char_to_upper(service.service_name) + "Api"
-    print(f"class {class_name}(object):")
+def generate_service_api(output, service: ServiceModel, doc=True):
+    service_name = service.service_name.replace('-', '_')
+    class_name = service_name + "_api"
+    class_name = snake_to_camel_case(class_name)
+
+    output.write(f"class {class_name}:\n")
+    output.write(f"\n")
+    output.write(f"    service = \"{service.service_name}\"\n")
+    output.write(f"    version = \"{service.api_version}\"\n")
     for op_name in service.operation_names:
         operation: OperationModel = service.operation_model(op_name)
 
@@ -169,7 +197,7 @@ def main():
         else:
             output_shape = "None"
 
-        print("")
+        output.write("\n")
         shape = operation.input_shape
         shape: StructureShape
         members = list(shape.members)
@@ -187,22 +215,59 @@ def main():
             parameters[xform_name(m)] = f"{m_shape.name} = None"
 
         param_list = ", ".join([f"{k}: {v}" for k, v in parameters.items()])
-        print(f"    def {fn_name}(self, {param_list}) -> {output_shape}:")
+        output.write(f"    @handler(\"{operation.name}\")\n")
+        output.write(f"    def {fn_name}(self, context: RequestContext, {param_list}) -> {output_shape}:\n")
 
-        html = operation.documentation
-        import pypandoc
+        # convert html documentation to rst and print it into to the signature
+        if doc:
+            html = operation.documentation
+            import pypandoc
 
-        doc = pypandoc.convert_text(html, "rst", format="html")
-        print(f'        """')
-        print(f"{doc.strip()}")
-        print()
-        for param_name, shape in param_shapes.items():
-            pdoc = pypandoc.convert_text(shape.documentation, "rst", format="html")
-            pdoc = pdoc.strip().split(".")[0] + "."
-            print(f":param {param_name}: {pdoc}")
+            doc = pypandoc.convert_text(html, "rst", format="html")
+            output.write(f'        """\n')
+            output.write(f"{doc.strip()}\n")
+            output.write("\n")
 
-        print(f'        """')
-        print(f"        raise NotImplementedError")
+            # parameters
+            for param_name, shape in param_shapes.items():
+                # FIXME: this doesn't work properly
+                pdoc = pypandoc.convert_text(shape.documentation, "rst", format="html")
+                pdoc = pdoc.strip().split(".")[0] + "."
+                output.write(f":param {param_name}: {pdoc}\n")
+
+            for error in operation.error_shapes:
+                output.write(f":raises: {error.name}\n")
+
+            output.write(f'        """\n')
+
+        output.write(f"        raise NotImplementedError\n")
+
+
+def main():
+    # service = load_service("firehose")
+    service = load_service("sqs")
+    # service = load_service("comprehend", "2017-11-27")
+    # service = load_service("firehose", "2015-08-04")
+
+    output = io.StringIO()
+    generate_service_types(output, service)
+    generate_service_api(output, service, doc=False)
+
+    model = "model.py"
+    api = "api.py"
+
+    "from .model import *"
+
+    code = output.getvalue()
+
+    try:
+        # try to format with black
+        from black import format_str, FileMode
+        res = format_str(code, mode=FileMode())
+        print(res)
+    except:
+        # otherwise just print
+        print(code)
 
 
 if __name__ == "__main__":
