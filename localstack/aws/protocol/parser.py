@@ -1,14 +1,13 @@
 import abc
 import json
-import os
 import pkgutil
 from typing import Any, List, Tuple
 from urllib.parse import parse_qs
 
-from aws_xray_sdk.ext.util import to_snake_case
 from botocore import xform_name
 from botocore.model import ListShape, MapShape, OperationModel, ServiceModel, Shape, StructureShape
 
+from localstack.aws.spec import load_service
 from localstack.utils.common import to_str
 
 data = {
@@ -67,17 +66,6 @@ data = {
 # }
 
 
-def load_service(service: str, version: str) -> ServiceModel:
-    """
-    For example: load_service("sqs", "2012-11-05")
-    """
-    path = os.path.join("data", service, version, "service-2.json")
-    data = pkgutil.get_data("botocore", path)
-    service_description = json.loads(data)
-
-    return ServiceModel(service_description, service)
-
-
 class Schema:
     def __init__(self, file):
         self.schema = json.loads(pkgutil.get_data("botocore", file))
@@ -91,6 +79,10 @@ class Schema:
 
 class RequestParser(abc.ABC):
     service: ServiceModel
+
+    def __init__(self, service: ServiceModel) -> None:
+        super().__init__()
+        self.service = service
 
     def parse(self, request) -> Tuple[OperationModel, Any]:
         raise NotImplementedError
@@ -125,6 +117,7 @@ class RequestParser(abc.ABC):
 
 
 class QueryRequestParser(RequestParser):
+
     def parse(self, request) -> Tuple[OperationModel, Any]:
         body = to_str(request["body"])
         instance = parse_qs(body, keep_blank_values=True)
@@ -226,12 +219,25 @@ class QueryRequestParser(RequestParser):
         return [r[1] for r in sorted(result)]
 
 
-def main():
-    service: ServiceModel = load_service("sqs", "2012-11-05")
+def create_parser(service: ServiceModel) -> RequestParser:
+    parsers = {
+        "query": QueryRequestParser,
+        "json": None,  # TODO
+        "rest-json": None,  # TODO
+        "rest-xml": None,  # TODO
+        "ec2": None,  # TODO
+    }
 
-    p = QueryRequestParser()
-    p.service = service
-    operation, instance = p.parse(data)
+    return parsers[service.protocol](service)
+
+
+def main():
+    request = data
+
+    service: ServiceModel = load_service("sqs")
+
+    parser = create_parser(service)
+    operation, instance = parser.parse(request)
 
     # convert to function invocation
     fn = xform_name(operation.name)
