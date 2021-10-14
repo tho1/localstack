@@ -1,4 +1,3 @@
-import inspect
 from typing import Any, Callable, Type, TypedDict, Dict
 
 from botocore.model import OperationModel, ServiceModel
@@ -67,28 +66,8 @@ DispatchTable = Dict[str, ServiceRequestHandler]
 
 def handler(operation: str = None, context: bool = True, expand: bool = True):
     def wrapper(fn):
-
         return ServiceRequestHandler(
             fn=fn, operation=operation, pass_context=context, expand_parameters=expand
         )
 
     return wrapper
-
-
-class Skeleton:
-    service: ServiceModel
-    delegate: Any
-    dispatch_table: DispatchTable
-
-    def __init__(self, service: ServiceModel, delegate: Any):
-        self.service = service
-        self.delegate = delegate
-        self.dispatch_table: DispatchTable = dict()
-
-        for name, obj in inspect.getmembers(delegate):
-            if isinstance(obj, ServiceRequestHandler):
-                self.dispatch_table[obj.operation] = obj
-
-    def invoke(self, request: RequestContext):
-        pass
-
