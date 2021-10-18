@@ -1,76 +1,31 @@
 import abc
+import datetime
 import json
 import pkgutil
 from typing import Any, List, Tuple
 from urllib.parse import parse_qs
 
+import dateutil.parser
 from botocore import xform_name
 from botocore.model import ListShape, MapShape, OperationModel, ServiceModel, Shape, StructureShape
 
 from localstack.aws.spec import load_service
 from localstack.utils.common import to_str
 
-data = {
-    "method": "POST",
-    "path": "/",
-    "body": "Action=SendMessage&Version=2012-11-05&QueueUrl=http%3A%2F%2Flocalhost%3A4566%2F000000000000%2Ftf-acc-test-queue&MessageBody=%7B%22foo%22%3A+%22bared%22%7D&DelaySeconds=2",
-    "headers": {
-        "Remote-Addr": "127.0.0.1",
-        "Host": "localhost:4566",
-        "Accept-Encoding": "identity",
-        "Content-Type": "application/x-www-form-urlencoded; charset=utf-8",
-        "User-Agent": "aws-cli/1.20.47 Python/3.8.10 Linux/5.4.0-88-generic botocore/1.21.47",
-        "X-Amz-Date": "20211009T185815Z",
-        "Authorization": "AWS4-HMAC-SHA256 Credential=test/20211009/us-east-1/sqs/aws4_request, SignedHeaders=content-type;host;x-amz-date, Signature=d9f93b13a07dda8cba650fba583fab92e0c72465e5e02fb56a3bb4994aefc339",
-        "Content-Length": "169",
-        "x-localstack-request-url": "http://localhost:4566/",
-        "X-Forwarded-For": "127.0.0.1, localhost:4566",
-    },
-}
-
-data = {
-    "method": "POST",
-    "path": "/",
-    "body": "Action=SetQueueAttributes&Version=2012-11-05&QueueUrl=http%3A%2F%2Flocalhost%3A4566%2F000000000000%2Ftf-acc-test-queue&Attribute.1.Name=DelaySeconds&Attribute.1.Value=10&Attribute.2.Name=MaximumMessageSize&Attribute.2.Value=131072&Attribute.3.Name=MessageRetentionPeriod&Attribute.3.Value=259200&Attribute.4.Name=ReceiveMessageWaitTimeSeconds&Attribute.4.Value=20&Attribute.5.Name=RedrivePolicy&Attribute.5.Value=%7B%22deadLetterTargetArn%22%3A%22arn%3Aaws%3Asqs%3Aus-east-1%3A80398EXAMPLE%3AMyDeadLetterQueue%22%2C%22maxReceiveCount%22%3A%221000%22%7D&Attribute.6.Name=VisibilityTimeout&Attribute.6.Value=60",
-    "headers": {
-        "Remote-Addr": "127.0.0.1",
-        "Host": "localhost:4566",
-        "Accept-Encoding": "identity",
-        "Content-Type": "application/x-www-form-urlencoded; charset=utf-8",
-        "User-Agent": "aws-cli/1.20.47 Python/3.8.10 Linux/5.4.0-88-generic botocore/1.21.47",
-        "X-Amz-Date": "20211009T190345Z",
-        "Authorization": "AWS4-HMAC-SHA256 Credential=test/20211009/us-east-1/sqs/aws4_request, SignedHeaders=content-type;host;x-amz-date, Signature=c584bc5d328b1e6cb833ad23fc278ed1c76a16b66f14ed12f144bcc6b77c7c3f",
-        "Content-Length": "608",
-        "x-localstack-request-url": "http://localhost:4566/",
-        "X-Forwarded-For": "127.0.0.1, localhost:4566",
-    },
-}
-
-
-# data = {
-#     "method": "POST",
-#     "path": "/",
-#     "body": "Action=DeleteMessageBatch&Version=2012-11-05&QueueUrl=http%3A%2F%2Flocalhost%3A4566%2F000000000000%2Ftf-acc-test-queue&DeleteMessageBatchRequestEntry.1.Id=bar&DeleteMessageBatchRequestEntry.1.ReceiptHandle=foo&DeleteMessageBatchRequestEntry.2.Id=bar&DeleteMessageBatchRequestEntry.2.ReceiptHandle=foo",
-#     "headers": {
-#         "Remote-Addr": "127.0.0.1",
-#         "Host": "localhost:4566",
-#         "Accept-Encoding": "identity",
-#         "Content-Type": "application/x-www-form-urlencoded; charset=utf-8",
-#         "User-Agent": "Boto3/1.18.36 Python/3.8.10 Linux/5.4.0-88-generic Botocore/1.21.36",
-#         "X-Amz-Date": "20211009T202120Z",
-#         "Authorization": "AWS4-HMAC-SHA256 Credential=test/20211009/us-east-1/sqs/aws4_request, SignedHeaders=content-type;host;x-amz-date, Signature=f01ac21fb20d97a38bd72f40c3494543230668ba41fe4fc490fc3e59c6437315",
-#         "Content-Length": "300",
-#         "x-localstack-request-url": "http://localhost:4566/",
-#         "X-Forwarded-For": "127.0.0.1, localhost:4566"
-#     }
-# }
-
 
 class Schema:
+    """Loads the schema from botocore and provides access to the service shapes."""
+
     def __init__(self, file):
         self.schema = json.loads(pkgutil.get_data("botocore", file))
 
-    def shape(self, name):
+    def shape(self, name: str) -> Shape:
+        """
+        Looks for a shape with the given name.
+
+        :param name: of the shape to lookup
+        :return: Shape
+        """
         d = self.schema["shapes"].get(name)
         if not d:
             raise ValueError("no such shape " + name)
@@ -78,33 +33,66 @@ class Schema:
 
 
 class RequestParser(abc.ABC):
+    """Parses a request to an AWS service (OperationModel and Input-Shapes."""
+
     service: ServiceModel
 
     def __init__(self, service: ServiceModel) -> None:
         super().__init__()
         self.service = service
 
-    def parse(self, request) -> Tuple[OperationModel, Any]:
+    def parse(self, request: dict) -> Tuple[OperationModel, Any]:
         raise NotImplementedError
 
-    def _parse_shape(self, shape, node):
+    def _parse_shape(self, request: dict, shape: Shape, node: dict):
+        location = shape.serialization.get("location")
+        if location is not None:
+            if location == "header":
+                headers = request.get("headers")
+                location_name = shape.serialization.get("locationName")
+                payload = headers.get(location_name)
+            elif location == "headers":
+                headers = request.get("headers")
+                location_name = shape.serialization.get("locationName")
+                payload = self._filter_node(location_name, headers)
+            elif location == "querystring":
+                # TODO implement
+                # - shape.serialization.get('locationName')
+                # - Use the queryparser to parse the query string and extract the locationName
+                raise NotImplementedError
+            elif location == "uri":
+                # TODO implement
+                # - shape.serialization.get('locationName')
+                # - parse the correct path parameter from the path according to the pattern in the requestUri
+                #   in the operation model
+                raise NotImplementedError
+        else:
+            # If we don't have to use a specific location, we use the node
+            payload = node
+
         fn_name = "_parse_%s" % shape.type_name
         handler = getattr(self, fn_name, self._noop_parser)
-        return handler(shape, node)
+        return handler(request, shape, payload)
 
-    def _parse_list(self, shape, node):
+    def _parse_list(self, request: dict, shape: ListShape, node: list):
         # Enough implementations share list serialization that it's moved
         # up here in the base class.
         parsed = []
         member_shape = shape.member
         for item in node:
-            parsed.append(self._parse_shape(member_shape, item))
+            parsed.append(self._parse_shape(request, member_shape, item))
         return parsed
 
-    def _parse_integer(self, _, node):
+    def _parse_integer(self, _, __, node: str) -> int:
         return int(node)
 
-    def _parse_boolean(self, _, node):
+    def _parse_double(self, _, __, node: str) -> float:
+        return float(node)
+
+    def _parse_timestamp(self, _, shape: Shape, node: str) -> datetime.datetime:
+        return self._convert_str_to_timestamp(node, shape.serialization.get("timestampFormat"))
+
+    def _parse_boolean(self, _, __, node: str) -> bool:
         value = node.lower()
         if value == "true":
             return True
@@ -112,20 +100,48 @@ class RequestParser(abc.ABC):
             return False
         raise ValueError("cannot parse boolean value %s" % node)
 
-    def _noop_parser(self, _, node):
+    def _noop_parser(self, _, __, node: any):
         return node
+
+    @staticmethod
+    def _filter_node(name: str, node: dict) -> dict:
+        filtered = {k[len(name) + 1 :]: v for k, v in node.items() if k.startswith(name)}
+        return filtered if len(filtered) > 0 else None
+
+    def _timestamp_iso8601(self, date_string: str) -> datetime.datetime:
+        return dateutil.parser.isoparse(date_string)
+
+    def _timestamp_unixtimestamp(self, timestamp_string: str) -> datetime.datetime:
+        return datetime.datetime.utcfromtimestamp(int(timestamp_string))
+
+    def _timestamp_rfc822(self, datetime_string: str) -> datetime.datetime:
+        from email.utils import parsedate_to_datetime
+
+        return parsedate_to_datetime(datetime_string)
+
+    def _convert_str_to_timestamp(self, value: str, timestamp_format=None):
+        if timestamp_format is None:
+            timestamp_format = self.TIMESTAMP_FORMAT
+        timestamp_format = timestamp_format.lower()
+        converter = getattr(self, "_timestamp_%s" % timestamp_format)
+        final_value = converter(value)
+        return final_value
 
 
 class QueryRequestParser(RequestParser):
+    TIMESTAMP_FORMAT = "iso8601"
 
-    def parse(self, request) -> Tuple[OperationModel, Any]:
+    def parse(self, request: dict) -> Tuple[OperationModel, Any]:
         body = to_str(request["body"])
         instance = parse_qs(body, keep_blank_values=True)
-
-        operation: OperationModel = self.service.operation_model(instance["Action"][0])
+        # The query parsing returns a list for each entry in the dict (this is how HTTP handles lists in query params).
+        # However, the AWS Query format does not have any duplicates.
+        # Therefore we take the first element of each entry in the dict.
+        instance = {k: self._get_first(v) for k, v in instance.items()}
+        operation: OperationModel = self.service.operation_model(instance["Action"])
         input_shape: StructureShape = operation.input_shape
 
-        return operation, self._parse_shape(input_shape, instance)
+        return operation, self._parse_shape(request, input_shape, instance)
 
     @staticmethod
     def _get_first(node):
@@ -133,90 +149,110 @@ class QueryRequestParser(RequestParser):
             return node[0]
         return node
 
-    def _parse_string(self, _, node):
-        return str(self._get_first(node))
+    def _process_member(self, request: dict, member_name: str, member_shape: Shape, node: dict):
+        if isinstance(member_shape, (MapShape, ListShape, StructureShape)):
+            # If we have a complex type, we filter the node and change it's keys to craft a new "context" for the
+            # new hierarchy level
+            sub_node = self._filter_node(member_name, node)
+        else:
+            # If it is a primitive type we just get the value from the dict
+            sub_node = node.get(member_name)
+        # The filtered node is processed and returned (or None if the sub_node is None)
+        return self._parse_shape(request, member_shape, sub_node) if sub_node is not None else None
 
-    def _parse_integer(self, _, node):
-        return int(self._get_first(node))
-
-    def _parse_boolean(self, shape, node):
-        return super()._parse_boolean(shape, self._get_first(node))
-
-    def _parse_structure(self, shape, node):
+    def _parse_structure(self, request: dict, shape: StructureShape, node: dict) -> dict:
         result = dict()
 
         for member, member_shape in shape.members.items():
-            if isinstance(member_shape, (MapShape, ListShape)):
-                result[member] = self._parse_shape(member_shape, node)
-                continue
+            # The key in the node is either the serialization config "name" of the shape, or the name of the member
+            member_name = member_shape.serialization.get("name", member)
+            # BUT, if it's flattened and a list, the name is defined by the list's member's name
+            if member_shape.serialization.get("flattened"):
+                if isinstance(member_shape, ListShape):
+                    member_name = member_shape.member.serialization.get("name", member)
+            value = self._process_member(request, member_name, member_shape, node)
+            if value is not None:
+                result[member] = value
 
-            if member in node:
-                result[member] = self._parse_shape(member_shape, node[member])
+        return result if len(result) > 0 else None
 
-        return result
-
-    def _parse_map(self, shape: MapShape, node):
+    def _parse_map(self, request: dict, shape: MapShape, node: dict) -> dict:
         """
         This is what the flattened key value pairs the node look like:
         {
-            "Attribute.1.Name": ["MyKey"],
-            "Attribute.1.Value": = ["MyValue"],
-            "Attribute.2.Name": [...],
+            "Attribute.1.Name": "MyKey",
+            "Attribute.1.Value": "MyValue",
+            "Attribute.2.Name": ...,
             ...
         }
+        This function expects an already filtered / processed node. The node dict would therefore look like:
+        {
+            "1.Name": "MyKey",
+            "1.Value": "MyValue",
+            "2.Name": ...
+        }
         """
-        # TODO: check what flattened means
-        flattened = shape.serialization["flattened"]
-
-        key_prefix = shape.serialization["name"]
+        key_prefix = ""
+        # Non-flattened maps have an additional hierarchy level named "entry"
+        # https://awslabs.github.io/smithy/1.0/spec/core/xml-traits.html#xmlflattened-trait
+        if not shape.serialization.get("flattened"):
+            key_prefix += "entry."
         result = dict()
 
         i = 0
         while True:
             i += 1
+            # The key and value can be renamed (with their serialization config's "name").
+            # By default they are called "key" and "value".
+            key_name = f"{key_prefix}{i}.{shape.key.serialization.get('name', 'key')}"
+            value_name = f"{key_prefix}{i}.{shape.value.serialization.get('name', 'value')}"
 
-            k_name = f"{key_prefix}.{i}.Name"
-            k_value = f"{key_prefix}.{i}.Value"
-
-            if k_name not in node or k_value not in node:
+            # We process the key and value individually
+            k = self._process_member(request, key_name, shape.key, node)
+            v = self._process_member(request, value_name, shape.value, node)
+            if k is None or v is None:
                 # technically, if one exists but not the other, then that would be an invalid request
                 break
-
-            k = self._parse_shape(shape.key, node[k_name])
-            v = self._parse_shape(shape.value, node[k_value])
-
             result[k] = v
 
-        return result
+        return result if len(result) > 0 else None
 
-    def _parse_list(self, shape: ListShape, node) -> List:
+    def _parse_list(self, request: dict, shape: ListShape, node: dict) -> list:
         """
-        Some actions take lists of parameters. These lists are specified using the param.n notation. Values of n are
-        integers starting from 1. For example, a parameter list with two elements looks like this:
-
-        &AttributeName.1=first&AttributeName.2=second
+        Some actions take lists of parameters. These lists are specified using the param.[member.]n notation.
+        The "member" is used if the list is not flattened.
+        Values of n are integers starting from 1.
+        For example, a list with two elements looks like this:
+        - Flattened: &AttributeName.1=first&AttributeName.2=second
+        - Non-flattened: &AttributeName.member.1=first&AttributeName.member.2=second
+        This function expects an already filtered / processed node. The node dict would therefore look like:
+        {
+            "1": "first",
+            "2": "second",
+            "3": ...
+        }
         """
-        key_prefix = shape.serialization["name"]
 
-        # TODO: apparently if list shapes have enclosing dict members, they're actually encoded as maps dicts:
-        #  DeleteMessageBatchRequestEntry.1.Id (i suppose this is what flattened means)
+        # Non-flattened lists have an additional hierarchy level named "member"
+        # https://awslabs.github.io/smithy/1.0/spec/core/xml-traits.html#xmlflattened-trait
+        key_prefix = ""
+        if not shape.serialization.get("flattened"):
+            key_prefix += "member."
 
-        # we collect the list value as well as the integer indicating the list position so we can
+        # We collect the list value as well as the integer indicating the list position so we can
         # later sort the list by the position, in case they attribute values are unordered
         result: List[Tuple[int, Any]] = list()
 
         i = 0
         while True:
             i += 1
-
-            k = f"{key_prefix}.{i}"
-            if k not in node:
+            key_name = f"{key_prefix}{i}"
+            value = self._process_member(request, key_name, shape.member, node)
+            if value is None:
                 break
-
-            value = self._parse_shape(shape.member, node[k])
             result.append((i, value))
 
-        return [r[1] for r in sorted(result)]
+        return [r[1] for r in sorted(result)] if len(result) > 0 else None
 
 
 def create_parser(service: ServiceModel) -> RequestParser:
@@ -229,23 +265,3 @@ def create_parser(service: ServiceModel) -> RequestParser:
     }
 
     return parsers[service.protocol](service)
-
-
-def main():
-    request = data
-
-    service: ServiceModel = load_service("sqs")
-
-    parser = create_parser(service)
-    operation, instance = parser.parse(request)
-
-    # convert to function invocation
-    fn = xform_name(operation.name)
-    params = {xform_name(k): v for k, v in instance.items()}
-
-    # TODO: call me now!
-    print(f"{fn}(**{params})")
-
-
-if __name__ == "__main__":
-    main()

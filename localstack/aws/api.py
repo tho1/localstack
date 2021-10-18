@@ -1,4 +1,4 @@
-from typing import Any, Callable, Type, TypedDict, Dict
+from typing import Any, Callable, Dict, Type, TypedDict
 
 from botocore.model import OperationModel, ServiceModel
 
@@ -34,11 +34,11 @@ class ServiceRequestHandler:
     pass_context: bool = True
 
     def __init__(
-            self,
-            fn: Callable,
-            operation: str,
-            pass_context: bool = True,
-            expand_parameters: bool = False,
+        self,
+        fn: Callable,
+        operation: str,
+        pass_context: bool = True,
+        expand_parameters: bool = False,
     ):
         self.fn = fn
         self.operation = operation

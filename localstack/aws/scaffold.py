@@ -6,9 +6,10 @@ from botocore.model import (
     ListShape,
     MapShape,
     OperationModel,
+    ServiceModel,
     Shape,
     StringShape,
-    StructureShape, ServiceModel,
+    StructureShape,
 )
 from typing_extensions import OrderedDict
 
@@ -139,7 +140,9 @@ class ShapeNode:
 def generate_service_types(output, service: ServiceModel):
     output.write("from typing import Dict, List, TypedDict\n")
     output.write("\n")
-    output.write("from localstack.aws.api import handler, RequestContext, ServiceException, ServiceRequest")
+    output.write(
+        "from localstack.aws.api import handler, RequestContext, ServiceException, ServiceRequest"
+    )
     output.write("\n")
 
     # ==================================== print type declarations
@@ -151,7 +154,7 @@ def generate_service_types(output, service: ServiceModel):
 
     output.write("__all__ = [\n")
     for name in nodes.keys():
-        output.write(f"    \"{name}\",\n")
+        output.write(f'    "{name}",\n')
     output.write("]\n")
 
     printed: Set[str] = set()
@@ -178,14 +181,14 @@ def generate_service_types(output, service: ServiceModel):
 
 
 def generate_service_api(output, service: ServiceModel, doc=True):
-    service_name = service.service_name.replace('-', '_')
+    service_name = service.service_name.replace("-", "_")
     class_name = service_name + "_api"
     class_name = snake_to_camel_case(class_name)
 
     output.write(f"class {class_name}:\n")
     output.write(f"\n")
-    output.write(f"    service = \"{service.service_name}\"\n")
-    output.write(f"    version = \"{service.api_version}\"\n")
+    output.write(f'    service = "{service.service_name}"\n')
+    output.write(f'    version = "{service.api_version}"\n')
     for op_name in service.operation_names:
         operation: OperationModel = service.operation_model(op_name)
 
@@ -215,8 +218,10 @@ def generate_service_api(output, service: ServiceModel, doc=True):
             parameters[xform_name(m)] = f"{m_shape.name} = None"
 
         param_list = ", ".join([f"{k}: {v}" for k, v in parameters.items()])
-        output.write(f"    @handler(\"{operation.name}\")\n")
-        output.write(f"    def {fn_name}(self, context: RequestContext, {param_list}) -> {output_shape}:\n")
+        output.write(f'    @handler("{operation.name}")\n')
+        output.write(
+            f"    def {fn_name}(self, context: RequestContext, {param_list}) -> {output_shape}:\n"
+        )
 
         # convert html documentation to rst and print it into to the signature
         if doc:
@@ -262,7 +267,8 @@ def main():
 
     try:
         # try to format with black
-        from black import format_str, FileMode
+        from black import FileMode, format_str
+
         res = format_str(code, mode=FileMode())
         print(res)
     except:
