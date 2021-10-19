@@ -1,5 +1,6 @@
 from typing import Any, Callable, Dict, Type, TypedDict
 
+from botocore import xform_name
 from botocore.model import OperationModel, ServiceModel
 
 
@@ -29,7 +30,6 @@ class RequestContext:
 class ServiceRequestHandler:
     fn: Callable
     operation: str
-    context: RequestContext
     expand_parameters: bool = True
     pass_context: bool = True
 
@@ -49,16 +49,15 @@ class ServiceRequestHandler:
         args = []
         kwargs = {}
 
-        if self.pass_context:
-            args.append(self.context)
-
-        if self.expand_parameters:
-            # todo
-            pass
-        else:
+        if not self.expand_parameters:
+            if self.pass_context:
+                args.append(context)
             args.append(request)
+        else:
+            kwargs = {xform_name(k): v for k, v in request.items()}
+            kwargs["context"] = context
 
-        return self.fn(*args, **kwargs)
+        return self.fn(self, *args, **kwargs)
 
 
 DispatchTable = Dict[str, ServiceRequestHandler]

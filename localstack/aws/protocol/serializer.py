@@ -81,6 +81,7 @@ class BaseXMLResponseSerializer(ResponseSerializer):
     """
 
     # TODO error serialization
+    # TODO handle the response metadata (like the request ID)
     # TODO handle params which should end up in the headers
     # TODO handle "streaming" enabled shapes
 
@@ -89,11 +90,10 @@ class BaseXMLResponseSerializer(ResponseSerializer):
     def serialize_to_response(self, parameters: dict, operation_model: OperationModel):
         serialized = self._create_default_response()
         shape = operation_model.output_shape
-        shape_members = shape.members
-
-        self._serialize_payload(parameters, serialized, shape, shape_members, operation_model)
-
-        serialized = self._prepare_additional_traits(serialized, operation_model)
+        if shape is not None:
+            shape_members = shape.members
+            self._serialize_payload(parameters, serialized, shape, shape_members, operation_model)
+            serialized = self._prepare_additional_traits(serialized, operation_model)
         return serialized
 
     def _serialize_payload(

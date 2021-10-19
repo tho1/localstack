@@ -38,9 +38,10 @@ class Skeleton:
         # Marshall responses, catch (and marshall) all errors
         try:
             result = handler.__call__(context, instance)
-            return serializer.serialize(result)
+            return serializer.serialize_to_response(result, operation)
             # TODO marshall the response and return it
-        except:
+        except Exception as e:
             # TODO limit except clause
             # TODO marshall error for response
+            print(e)
             pass
