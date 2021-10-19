@@ -61,6 +61,10 @@ data = {
 # - Response serializer!
 # - LocalStack: aws_responses.py
 # - moto: ? (needs to do that as well)
+from urllib.parse import urlencode
+
+import boto3
+from botocore.serialize import QuerySerializer
 
 from localstack.aws.protocol.parser import QueryRequestParser
 from localstack.aws.spec import load_service
@@ -216,3 +220,109 @@ def test_query_parser_flattened_list_structure():
         "QueueUrl": "http://localhost:4566/000000000000/tf-acc-test-queue",
         "Entries": [{"Id": "bar", "ReceiptHandle": "foo"}, {"Id": "bar", "ReceiptHandle": "foo"}],
     }
+
+
+def _test_query_parser_botocore_integration_test(service: str, action: str, **kwargs):
+    # Load the appropriate service
+    service = load_service(service)
+    # Use the serializer from botocore to serialize the request params
+    serializer = QuerySerializer()
+    serialized_request = serializer.serialize_to_request(kwargs, service.operation_model(action))
+
+    # Serialize the body as query parameter
+    serialized_request["body"] = urlencode(serialized_request["body"])
+
+    # Use our parser to parse the serialized body
+    parser = QueryRequestParser(service)
+    operation_model, parsed_request = parser.parse(serialized_request)
+
+    # Check if the result is equal to the initial params
+    assert parsed_request == kwargs
+
+
+def test_query_parser_sqs_with_botocore():
+    _test_query_parser_botocore_integration_test(
+        service="sqs",
+        action="SendMessage",
+        QueueUrl="string",
+        MessageBody="string",
+        DelaySeconds=123,
+        MessageAttributes={
+            "string": {
+                "StringValue": "string",
+                "BinaryValue": b"bytes",
+                "StringListValues": [
+                    "string",
+                ],
+                "BinaryListValues": [
+                    b"bytes",
+                ],
+                "DataType": "string",
+            }
+        },
+        MessageSystemAttributes={
+            "string": {
+                "StringValue": "string",
+                "BinaryValue": b"bytes",
+                "StringListValues": [
+                    "string",
+                ],
+                "BinaryListValues": [
+                    b"bytes",
+                ],
+                "DataType": "string",
+            }
+        },
+        MessageDeduplicationId="string",
+        MessageGroupId="string",
+    )
+
+
+def test_query_parser_cloudformation_with_botocore():
+    _test_query_parser_botocore_integration_test(
+        service="cloudformation",
+        action="CreateStack",
+        StackName="string",
+        TemplateBody="string",
+        TemplateURL="string",
+        Parameters=[
+            {
+                "ParameterKey": "string",
+                "ParameterValue": "string",
+                "UsePreviousValue": True,
+                "ResolvedValue": "string",
+            },
+        ],
+        DisableRollback=False,
+        RollbackConfiguration={
+            "RollbackTriggers": [
+                {"Arn": "string", "Type": "string"},
+            ],
+            "MonitoringTimeInMinutes": 123,
+        },
+        TimeoutInMinutes=123,
+        NotificationARNs=[
+            "string",
+        ],
+        Capabilities=[
+            "CAPABILITY_IAM",
+        ],
+        ResourceTypes=[
+            "string",
+        ],
+        RoleARN="string",
+        OnFailure="DO_NOTHING",
+        StackPolicyBody="string",
+        StackPolicyURL="string",
+        Tags=[
+            {"Key": "string", "Value": "string"},
+        ],
+        ClientRequestToken="string",
+        EnableTerminationProtection=False,
+    )
+
+
+# TODO Add additional tests (or even automate the creation)
+# - Go to the Boto3 Docs (https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/index.html)
+# - Look for boto3 request syntax definition for services that use the protocol you want to test
+# - Take request syntax, remove the "or" ("|") and call the helper function with these named params

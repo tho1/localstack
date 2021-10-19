@@ -5,6 +5,7 @@ from botocore.model import ServiceModel
 
 from localstack.aws.api import DispatchTable, RequestContext, ServiceRequestHandler
 from localstack.aws.protocol.parser import create_parser
+from localstack.aws.protocol.serializer import create_serializer
 
 
 class Skeleton:
@@ -25,6 +26,7 @@ class Skeleton:
         service = context.service
 
         parser = create_parser(service)  # TODO cache
+        serializer = create_serializer(service)
         operation, instance = parser.parse(context.request)
 
         if operation.name not in self.dispatch_table:
@@ -34,4 +36,11 @@ class Skeleton:
 
         handler = self.dispatch_table[operation.name]
         # Marshall responses, catch (and marshall) all errors
-        handler.__call__(context, instance)
+        try:
+            result = handler.__call__(context, instance)
+            return serializer.serialize(result)
+            # TODO marshall the response and return it
+        except:
+            # TODO limit except clause
+            # TODO marshall error for response
+            pass

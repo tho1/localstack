@@ -1,4 +1,5 @@
 import abc
+import base64
 import datetime
 import json
 import pkgutil
@@ -6,10 +7,8 @@ from typing import Any, List, Tuple
 from urllib.parse import parse_qs
 
 import dateutil.parser
-from botocore import xform_name
 from botocore.model import ListShape, MapShape, OperationModel, ServiceModel, Shape, StructureShape
 
-from localstack.aws.spec import load_service
 from localstack.utils.common import to_str
 
 
@@ -50,21 +49,30 @@ class RequestParser(abc.ABC):
             if location == "header":
                 headers = request.get("headers")
                 location_name = shape.serialization.get("locationName")
-                payload = headers.get(location_name)
+                # TODO implement proper parsing
+                # https://awslabs.github.io/smithy/1.0/spec/core/http-traits.html#httpheader-trait
+                # Attention: This differs from the other protocols!
+                raise NotImplementedError
             elif location == "headers":
                 headers = request.get("headers")
                 location_name = shape.serialization.get("locationName")
-                payload = self._filter_node(location_name, headers)
+                # TODO implement proper parsing
+                # https://awslabs.github.io/smithy/1.0/spec/core/http-traits.html#httpprefixheaders-trait
+                # Attention: This differs from the other protocols!
+                raise NotImplementedError
             elif location == "querystring":
-                # TODO implement
-                # - shape.serialization.get('locationName')
-                # - Use the queryparser to parse the query string and extract the locationName
+                body = to_str(request["body"])
+                location_name = shape.serialization.get("locationName")
+                # TODO implement proper parsing
+                # https://awslabs.github.io/smithy/1.0/spec/core/http-traits.html#httpquery-trait
+                # Attention: This differs from the other protocols, even the Query protocol!
                 raise NotImplementedError
             elif location == "uri":
-                # TODO implement
-                # - shape.serialization.get('locationName')
-                # - parse the correct path parameter from the path according to the pattern in the requestUri
-                #   in the operation model
+                path = to_str(request["path"])
+                location_name = shape.serialization.get("locationName")
+                # TODO implement proper parsing
+                # https://awslabs.github.io/smithy/1.0/spec/core/http-traits.html#httplabel-trait
+                # Attention: This differs from the other protocols, even the Query protocol!
                 raise NotImplementedError
         else:
             # If we don't have to use a specific location, we use the node
@@ -88,6 +96,9 @@ class RequestParser(abc.ABC):
 
     def _parse_double(self, _, __, node: str) -> float:
         return float(node)
+
+    def _parse_blob(self, _, __, node: str) -> float:
+        return base64.b64decode(node)
 
     def _parse_timestamp(self, _, shape: Shape, node: str) -> datetime.datetime:
         return self._convert_str_to_timestamp(node, shape.serialization.get("timestampFormat"))
