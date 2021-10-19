@@ -1,9 +1,7 @@
 import abc
 import base64
 import datetime
-import json
-import pkgutil
-from typing import Any, List, Tuple
+from typing import Any, Dict, List, Tuple, TypedDict
 from urllib.parse import parse_qs
 
 import dateutil.parser
@@ -12,23 +10,11 @@ from botocore.model import ListShape, MapShape, OperationModel, ServiceModel, Sh
 from localstack.utils.common import to_str
 
 
-class Schema:
-    """Loads the schema from botocore and provides access to the service shapes."""
-
-    def __init__(self, file):
-        self.schema = json.loads(pkgutil.get_data("botocore", file))
-
-    def shape(self, name: str) -> Shape:
-        """
-        Looks for a shape with the given name.
-
-        :param name: of the shape to lookup
-        :return: Shape
-        """
-        d = self.schema["shapes"].get(name)
-        if not d:
-            raise ValueError("no such shape " + name)
-        return Shape(name, d)
+class RequestDict(TypedDict):
+    body: Any
+    headers: Dict[str, str]
+    path: str
+    method: str
 
 
 class RequestParser(abc.ABC):
@@ -40,10 +26,10 @@ class RequestParser(abc.ABC):
         super().__init__()
         self.service = service
 
-    def parse(self, request: dict) -> Tuple[OperationModel, Any]:
+    def parse(self, request: RequestDict) -> Tuple[OperationModel, Any]:
         raise NotImplementedError
 
-    def _parse_shape(self, request: dict, shape: Shape, node: dict):
+    def _parse_shape(self, request: RequestDict, shape: Shape, node: dict):
         location = shape.serialization.get("location")
         if location is not None:
             if location == "header":
@@ -82,7 +68,7 @@ class RequestParser(abc.ABC):
         handler = getattr(self, fn_name, self._noop_parser)
         return handler(request, shape, payload)
 
-    def _parse_list(self, request: dict, shape: ListShape, node: list):
+    def _parse_list(self, request: RequestDict, shape: ListShape, node: list):
         # Enough implementations share list serialization that it's moved
         # up here in the base class.
         parsed = []
@@ -142,7 +128,7 @@ class RequestParser(abc.ABC):
 class QueryRequestParser(RequestParser):
     TIMESTAMP_FORMAT = "iso8601"
 
-    def parse(self, request: dict) -> Tuple[OperationModel, Any]:
+    def parse(self, request: RequestDict) -> Tuple[OperationModel, Any]:
         body = to_str(request["body"])
         instance = parse_qs(body, keep_blank_values=True)
         # The query parsing returns a list for each entry in the dict (this is how HTTP handles lists in query params).
@@ -160,7 +146,9 @@ class QueryRequestParser(RequestParser):
             return node[0]
         return node
 
-    def _process_member(self, request: dict, member_name: str, member_shape: Shape, node: dict):
+    def _process_member(
+        self, request: RequestDict, member_name: str, member_shape: Shape, node: dict
+    ):
         if isinstance(member_shape, (MapShape, ListShape, StructureShape)):
             # If we have a complex type, we filter the node and change it's keys to craft a new "context" for the
             # new hierarchy level
@@ -171,7 +159,7 @@ class QueryRequestParser(RequestParser):
         # The filtered node is processed and returned (or None if the sub_node is None)
         return self._parse_shape(request, member_shape, sub_node) if sub_node is not None else None
 
-    def _parse_structure(self, request: dict, shape: StructureShape, node: dict) -> dict:
+    def _parse_structure(self, request: RequestDict, shape: StructureShape, node: dict) -> dict:
         result = dict()
 
         for member, member_shape in shape.members.items():
@@ -187,7 +175,7 @@ class QueryRequestParser(RequestParser):
 
         return result if len(result) > 0 else None
 
-    def _parse_map(self, request: dict, shape: MapShape, node: dict) -> dict:
+    def _parse_map(self, request: RequestDict, shape: MapShape, node: dict) -> dict:
         """
         This is what the flattened key value pairs the node look like:
         {
@@ -228,7 +216,7 @@ class QueryRequestParser(RequestParser):
 
         return result if len(result) > 0 else None
 
-    def _parse_list(self, request: dict, shape: ListShape, node: dict) -> list:
+    def _parse_list(self, request: RequestDict, shape: ListShape, node: dict) -> list:
         """
         Some actions take lists of parameters. These lists are specified using the param.[member.]n notation.
         The "member" is used if the list is not flattened.
