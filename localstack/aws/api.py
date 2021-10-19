@@ -54,7 +54,10 @@ class ServiceRequestHandler:
                 args.append(context)
             args.append(request)
         else:
-            kwargs = {xform_name(k): v for k, v in request.items()}
+            if request is None:
+                kwargs = {}
+            else:
+                kwargs = {xform_name(k): v for k, v in request.items()}
             kwargs["context"] = context
 
         return self.fn(self, *args, **kwargs)

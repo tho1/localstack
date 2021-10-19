@@ -1,4 +1,5 @@
 import inspect
+import logging
 from typing import Any
 
 from botocore.model import ServiceModel
@@ -6,6 +7,8 @@ from botocore.model import ServiceModel
 from localstack.aws.api import DispatchTable, RequestContext, ServiceRequestHandler
 from localstack.aws.protocol.parser import create_parser
 from localstack.aws.protocol.serializer import create_serializer
+
+LOG = logging.getLogger(__name__)
 
 
 class Skeleton:
@@ -22,16 +25,18 @@ class Skeleton:
             if isinstance(obj, ServiceRequestHandler):
                 self.dispatch_table[obj.operation] = obj
 
-    def invoke(self, context: RequestContext):
-        service = context.service
+        self.parser = create_parser(service)
+        self.serializer = create_serializer(service)
 
-        parser = create_parser(service)  # TODO cache
-        serializer = create_serializer(service)
+    def invoke(self, context: RequestContext):
+        parser = self.parser
+        serializer = self.serializer
+
         operation, instance = parser.parse(context.request)
 
         if operation.name not in self.dispatch_table:
             raise NotImplementedError(
-                "no entry in dispatch table for %s.%s" % (service.service_name, operation.name)
+                "no entry in dispatch table for %s.%s" % (self.service, operation.name)
             )
 
         handler = self.dispatch_table[operation.name]
@@ -43,5 +48,4 @@ class Skeleton:
         except Exception as e:
             # TODO limit except clause
             # TODO marshall error for response
-            print(e)
-            pass
+            LOG.exception(e)
