@@ -9,9 +9,7 @@ from localstack.aws.protocol.serializer import create_serializer
 from localstack.aws.spec import load_service
 
 
-def _botocore_serializer_integration_test(
-    service: str, action: str, response: dict, response_metadata: Optional[dict] = None
-):
+def _botocore_serializer_integration_test(service: str, action: str, response: dict):
     # Load the appropriate service
     service = load_service(service)
 
@@ -27,10 +25,13 @@ def _botocore_serializer_integration_test(
         serialized_response, service.operation_model(action).output_shape
     )
 
-    # Add the response metadata
-    response["ResponseMetadata"] = response_metadata or {"HTTPHeaders": {}, "HTTPStatusCode": 200}
-
     # Check if the result is equal to the initial response params
+    assert "ResponseMetadata" in parsed_response
+    assert "HTTPStatusCode" in parsed_response["ResponseMetadata"]
+    assert parsed_response["ResponseMetadata"]["HTTPStatusCode"] == 200
+    assert "RequestId" in parsed_response["ResponseMetadata"]
+    assert len(parsed_response["ResponseMetadata"]["RequestId"]) == 52
+    del parsed_response["ResponseMetadata"]
     assert parsed_response == response
 
 

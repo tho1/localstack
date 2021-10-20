@@ -10,6 +10,7 @@ from boto.utils import ISO8601
 from botocore.model import ListShape, MapShape, OperationModel, ServiceModel, Shape, StructureShape
 from botocore.serialize import ISO8601_MICRO
 from botocore.utils import conditionally_calculate_md5, parse_to_aware_datetime
+from moto.core.utils import gen_amzn_requestid_long
 
 
 class ResponseSerializer(abc.ABC):
@@ -65,7 +66,7 @@ class ResponseSerializer(abc.ABC):
             value = value.encode(self.DEFAULT_ENCODING)
         return base64.b64encode(value).strip().decode(self.DEFAULT_ENCODING)
 
-    def _prepare_additional_traits(self, response, operation_model):
+    def _prepare_additional_traits_in_response(self, response, operation_model):
         """Determine if additional traits are required for given model"""
         if operation_model.http_checksum_required:
             conditionally_calculate_md5(response)
@@ -81,7 +82,6 @@ class BaseXMLResponseSerializer(ResponseSerializer):
     """
 
     # TODO error serialization
-    # TODO handle the response metadata (like the request ID)
     # TODO handle params which should end up in the headers
     # TODO handle "streaming" enabled shapes
 
@@ -90,10 +90,9 @@ class BaseXMLResponseSerializer(ResponseSerializer):
     def serialize_to_response(self, parameters: dict, operation_model: OperationModel):
         serialized = self._create_default_response()
         shape = operation_model.output_shape
-        if shape is not None:
-            shape_members = shape.members
-            self._serialize_payload(parameters, serialized, shape, shape_members, operation_model)
-            serialized = self._prepare_additional_traits(serialized, operation_model)
+        shape_members = shape.members
+        self._serialize_payload(parameters, serialized, shape, shape_members, operation_model)
+        serialized = self._prepare_additional_traits_in_response(serialized, operation_model)
         return serialized
 
     def _serialize_payload(
@@ -132,8 +131,9 @@ class BaseXMLResponseSerializer(ResponseSerializer):
     def _serialize_body_params(
         self, params: dict, shape: Shape, operation_model: OperationModel
     ) -> ElementTree.Element:
-        real_root = self._serialize_body_params_to_xml(params, shape, operation_model)
-        return ElementTree.tostring(real_root, encoding=self.DEFAULT_ENCODING)
+        root = self._serialize_body_params_to_xml(params, shape, operation_model)
+        self._prepare_additional_traits_in_xml(root)
+        return ElementTree.tostring(root, encoding=self.DEFAULT_ENCODING)
 
     def _serialize_body_params_to_xml(
         self, params: dict, shape: Shape, operation_model: OperationModel
@@ -253,10 +253,20 @@ class BaseXMLResponseSerializer(ResponseSerializer):
         node = ElementTree.SubElement(xmlnode, name)
         node.text = six.text_type(params)
 
+    def _prepare_additional_traits_in_xml(self, root: ElementTree.Element):
+        """
+        Prepares the XML root node before being serialized with additional traits (like the Response ID in the Query
+        protocol).
+        """
+        pass
+
 
 class RestXMLResponseSerializer(BaseXMLResponseSerializer):
-    # TODO remove this subclass if it's not needed
-    pass
+    def _prepare_additional_traits_in_response(self, response, operation_model):
+        """Adds the request ID to the headers (in contrast to the body - as in the Query protocol)."""
+        response = super()._prepare_additional_traits_in_response(response, operation_model)
+        response["headers"]["x-amz-request-id"] = gen_amzn_requestid_long()
+        return response
 
 
 class QueryResponseSerializer(BaseXMLResponseSerializer):
@@ -285,6 +295,12 @@ class QueryResponseSerializer(BaseXMLResponseSerializer):
         root = ElementTree.Element(f"{operation_model.name}Response", attr)
         root.append(node)
         return root
+
+    def _prepare_additional_traits_in_xml(self, root: ElementTree.Element):
+        # Add the response metadata here (it's not defined in the specs)
+        response_metadata = ElementTree.SubElement(root, "ResponseMetadata")
+        request_id = ElementTree.SubElement(response_metadata, "RequestId")
+        request_id.text = gen_amzn_requestid_long()
 
 
 def create_serializer(service: ServiceModel) -> ResponseSerializer:
