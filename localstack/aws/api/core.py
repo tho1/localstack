@@ -35,12 +35,8 @@ class RequestContext:
     service: ServiceModel
     operation: OperationModel
     region: str
-    account: str
-    request: Any
-
-    @property
-    def headers(self):
-        return self.request["headers"]
+    account_id: str
+    request: HttpRequest
 
 
 class ServiceRequestHandler:
