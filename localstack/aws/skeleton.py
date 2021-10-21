@@ -4,7 +4,7 @@ from typing import Any, Dict
 
 from botocore.model import ServiceModel
 
-from localstack.aws.api import HttpResponse, RequestContext, ServiceRequestHandler
+from localstack.aws.api import HttpResponse, RequestContext, ServiceRequestHandler, ServiceException
 from localstack.aws.protocol.parser import create_parser
 from localstack.aws.protocol.serializer import create_serializer
 
@@ -35,6 +35,7 @@ class Skeleton:
         parser = self.parser
         serializer = self.serializer
 
+        # Parse the incoming HTTPRequest
         operation, instance = parser.parse(context.request)
 
         if operation.name not in self.dispatch_table:
@@ -43,12 +44,14 @@ class Skeleton:
             )
 
         handler = self.dispatch_table[operation.name]
-        # Marshall responses, catch (and marshall) all errors
         try:
-            result = handler.__call__(context, instance)
+            # Call the appropriate handler
+            result = handler.__call__(self.delegate, context, instance)
+            # Serialize result dict to an HTTPResponse and return it
             return serializer.serialize_to_response(result, operation)
-            # TODO marshall the response and return it
-        except Exception as e:
-            # TODO limit except clause
-            # TODO marshall error for response
-            LOG.exception(e)
+        except ServiceException as e:
+            return serializer.serialize_error_to_response(e, operation)
+        except NotImplementedError:
+            # TODO return a generic error message to avoid TF tests to break
+            # TODO check with waldemar how he implemented it in moto
+            pass

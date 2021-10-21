@@ -1,12 +1,16 @@
 from datetime import datetime
-from typing import Optional
 
 import pytest
-from botocore.parsers import create_parser
+from botocore.parsers import create_parser, ResponseParser
 from dateutil.tz import tzutc
 
+from localstack.aws.api import ServiceException
 from localstack.aws.protocol.serializer import create_serializer
 from localstack.aws.spec import load_service
+
+
+class InvalidMessageContents(ServiceException):
+    pass
 
 
 def _botocore_serializer_integration_test(service: str, action: str, response: dict):
@@ -195,6 +199,38 @@ def test_query_serializer_redshift_with_botocore():
         ],
     }
     _botocore_serializer_integration_test("redshift", "DescribeClusterDbRevisions", parameters)
+
+
+def test_query_protocol_error_serialization():
+    # Load the appropriate service
+    service = load_service("sqs")
+
+    response = InvalidMessageContents("Exception message!")
+
+    # Use our serializer to serialize the response
+    response_serializer = create_serializer(service)
+    serialized_response = response_serializer.serialize_error_to_response(
+        response, service.operation_model('SendMessage')
+    )
+
+    # Use the parser from botocore to parse the serialized response
+    response_parser: ResponseParser = create_parser(service.protocol)
+    parsed_response = response_parser.parse(
+        serialized_response, service.operation_model('SendMessage').output_shape
+    )
+
+    # Check if the result is equal to the initial response params
+    assert "Error" in parsed_response
+    assert "Code" in parsed_response["Error"]
+    assert "Message" in parsed_response["Error"]
+    assert parsed_response["Error"]["Code"] == "InvalidMessageContents"
+    assert parsed_response["Error"]["Message"] == "Exception message!"
+
+    assert "ResponseMetadata" in parsed_response
+    assert "RequestId" in parsed_response["ResponseMetadata"]
+    assert len(parsed_response["ResponseMetadata"]["RequestId"]) == 52
+    assert "HTTPStatusCode" in parsed_response["ResponseMetadata"]
+    assert parsed_response["ResponseMetadata"]["HTTPStatusCode"] == 400
 
 
 # TODO Add additional tests (or even automate the creation)

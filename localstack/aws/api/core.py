@@ -58,7 +58,7 @@ class ServiceRequestHandler:
         self.expand_parameters = expand_parameters
 
     def __call__(
-        self, context: RequestContext, request: ServiceRequest
+        self, delegate: any, context: RequestContext, request: ServiceRequest
     ) -> Optional[ServiceResponse]:
         args = []
         kwargs = {}
@@ -74,11 +74,12 @@ class ServiceRequestHandler:
                 kwargs = {xform_name(k): v for k, v in request.items()}
             kwargs["context"] = context
 
-        return self.fn(*args, **kwargs)
+        return self.fn(delegate, *args, **kwargs)
 
 
 def handler(operation: str = None, context: bool = True, expand: bool = True):
     def wrapper(fn):
+        print(fn)
         return ServiceRequestHandler(
             fn=fn, operation=operation, pass_context=context, expand_parameters=expand
         )
