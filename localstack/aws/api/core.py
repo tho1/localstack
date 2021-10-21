@@ -58,7 +58,7 @@ class ServiceRequestHandler:
         self.expand_parameters = expand_parameters
 
     def __call__(
-        self, delegate: any, context: RequestContext, request: ServiceRequest
+        self, delegate: Any, context: RequestContext, request: ServiceRequest
     ) -> Optional[ServiceResponse]:
         args = []
         kwargs = {}
@@ -79,7 +79,6 @@ class ServiceRequestHandler:
 
 def handler(operation: str = None, context: bool = True, expand: bool = True):
     def wrapper(fn):
-        print(fn)
         return ServiceRequestHandler(
             fn=fn, operation=operation, pass_context=context, expand_parameters=expand
         )

@@ -48,13 +48,7 @@ from localstack.utils.common import (
     run,
 )
 from localstack.utils.common import safe_requests as requests
-from localstack.utils.common import (
-    sleep_forever,
-    start_thread,
-    to_bytes,
-    to_str,
-    truncate,
-)
+from localstack.utils.common import sleep_forever, start_thread, to_bytes, to_str, truncate
 from localstack.utils.server.http2_server import HTTPErrorResponse
 
 LOG = logging.getLogger(__name__)
@@ -98,7 +92,7 @@ class ProxyListenerEdge(ProxyListener):
             return serve_resource_graph(data)
 
         # with open(f"/tmp/localstack/requests/r-{time.time()}-{short_uid()}.json", "w") as fd:
-        with open(f"/tmp/localstack/requests/requests.json", "a") as fd:
+        with open("/tmp/localstack/requests/requests.json", "a") as fd:
             fd.write(
                 json.dumps(
                     {
