@@ -1,7 +1,10 @@
 import io
+import os
 from typing import Dict, List, Set
 
+import click
 from botocore import xform_name
+from botocore.exceptions import UnknownServiceError
 from botocore.model import (
     ListShape,
     MapShape,
@@ -14,7 +17,7 @@ from botocore.model import (
 from typing_extensions import OrderedDict
 
 from localstack.aws.spec import load_service
-from localstack.utils.common import camel_to_snake_case, snake_to_camel_case
+from localstack.utils.common import camel_to_snake_case, mkdir, snake_to_camel_case
 
 
 class ShapeNode:
@@ -30,6 +33,8 @@ class ShapeNode:
     def is_request(self):
         for operation_name in self.service.operation_names:
             operation = self.service.operation_model(operation_name)
+            if operation.input_shape is None:
+                continue
             if self.shape.name == operation.input_shape.name:
                 return True
 
@@ -83,7 +88,10 @@ class ShapeNode:
                 members = "    pass"
 
             for k, v in shape.members.items():
-                members += f"    {k}: {v.name}\n"
+                if k in shape.required_members:
+                    members += f"    {k}: {v.name}\n"
+                else:
+                    members += f"    {k}: Optional[{v.name}]\n"
 
             code = f"""class {shape.name}({base}):\n{members}"""
         elif isinstance(shape, ListShape):
@@ -138,7 +146,7 @@ class ShapeNode:
 
 
 def generate_service_types(output, service: ServiceModel):
-    output.write("from typing import Dict, List, TypedDict\n")
+    output.write("from typing import Dict, List, Optional, TypedDict\n")
     output.write("\n")
     output.write(
         "from localstack.aws.api import handler, RequestContext, ServiceException, ServiceRequest"
@@ -152,10 +160,10 @@ def generate_service_types(output, service: ServiceModel):
         shape = service.shape_for(shape_name)
         nodes[shape_name] = ShapeNode(service, shape)
 
-    output.write("__all__ = [\n")
-    for name in nodes.keys():
-        output.write(f'    "{name}",\n')
-    output.write("]\n")
+    # output.write("__all__ = [\n")
+    # for name in nodes.keys():
+    #     output.write(f'    "{name}",\n')
+    # output.write("]\n")
 
     printed: Set[str] = set()
     stack: List[str] = list(nodes.keys())
@@ -186,14 +194,13 @@ def generate_service_api(output, service: ServiceModel, doc=True):
     class_name = snake_to_camel_case(class_name)
 
     output.write(f"class {class_name}:\n")
-    output.write(f"\n")
+    output.write("\n")
     output.write(f'    service = "{service.service_name}"\n')
     output.write(f'    version = "{service.api_version}"\n')
     for op_name in service.operation_names:
         operation: OperationModel = service.operation_model(op_name)
 
         fn_name = camel_to_snake_case(op_name)
-        input_shape = operation.input_shape.name
 
         if operation.output_shape:
             output_shape = operation.output_shape.name
@@ -201,21 +208,21 @@ def generate_service_api(output, service: ServiceModel, doc=True):
             output_shape = "None"
 
         output.write("\n")
-        shape = operation.input_shape
-        shape: StructureShape
-        members = list(shape.members)
         parameters = OrderedDict()
         param_shapes = OrderedDict()
 
-        for m in shape.required_members:
-            members.remove(m)
-            m_shape = shape.members[m]
-            parameters[xform_name(m)] = m_shape.name
-            param_shapes[xform_name(m)] = m_shape
-        for m in members:
-            m_shape = shape.members[m]
-            param_shapes[xform_name(m)] = m_shape
-            parameters[xform_name(m)] = f"{m_shape.name} = None"
+        input_shape = operation.input_shape
+        if input_shape is not None:
+            members = list(input_shape.members)
+            for m in input_shape.required_members:
+                members.remove(m)
+                m_shape = input_shape.members[m]
+                parameters[xform_name(m)] = m_shape.name
+                param_shapes[xform_name(m)] = m_shape
+            for m in members:
+                m_shape = input_shape.members[m]
+                param_shapes[xform_name(m)] = m_shape
+                parameters[xform_name(m)] = f"{m_shape.name} = None"
 
         param_list = ", ".join([f"{k}: {v}" for k, v in parameters.items()])
         output.write(f'    @handler("{operation.name}")\n')
@@ -229,7 +236,7 @@ def generate_service_api(output, service: ServiceModel, doc=True):
             import pypandoc
 
             doc = pypandoc.convert_text(html, "rst", format="html")
-            output.write(f'        """\n')
+            output.write('        """\n')
             output.write(f"{doc.strip()}\n")
             output.write("\n")
 
@@ -240,30 +247,43 @@ def generate_service_api(output, service: ServiceModel, doc=True):
                 pdoc = pdoc.strip().split(".")[0] + "."
                 output.write(f":param {param_name}: {pdoc}\n")
 
+            # return value
+            if operation.output_shape:
+                output.write(f":returns: {operation.output_shape.name}")
+
+            # errors
             for error in operation.error_shapes:
                 output.write(f":raises: {error.name}\n")
 
-            output.write(f'        """\n')
+            output.write('        """\n')
 
-        output.write(f"        raise NotImplementedError\n")
+        output.write("        raise NotImplementedError\n")
 
 
-def main():
-    # TODO: user argparse
+@click.command()
+@click.argument("service", type=str)
+@click.option("--doc/--no-doc", default=False, help="whether or not to generate docstrings")
+@click.option(
+    "--write/--stdout",
+    default=False,
+    help="whether or not to write the result into the api directory",
+)
+def generate(service: str, doc: bool, write: bool):
+    """
+    Generate types and API stubs for a given AWS service.
 
-    # service = load_service("firehose")
-    service = load_service("sqs")
-    # service = load_service("comprehend", "2017-11-27")
-    # service = load_service("firehose", "2015-08-04")
+    SERVICE is the service to generate the stubs for (e.g., sqs, or cloudformation)
+    """
+    from click import ClickException
+
+    try:
+        model = load_service(service)
+    except UnknownServiceError:
+        raise ClickException("unknown service %s" % service)
 
     output = io.StringIO()
-    generate_service_types(output, service)
-    generate_service_api(output, service, doc=False)
-
-    model = "model.py"
-    api = "core.py"
-
-    "from .model import *"
+    generate_service_types(output, model)
+    generate_service_api(output, model, doc=doc)
 
     code = output.getvalue()
 
@@ -271,12 +291,29 @@ def main():
         # try to format with black
         from black import FileMode, format_str
 
-        res = format_str(code, mode=FileMode())
-        print(res)
-    except:
-        # otherwise just print
-        print(code)
+        code = format_str(code, mode=FileMode())
+    except Exception:
+        pass
+
+    if not write:
+        # either just print the code to stdout
+        click.echo(code)
+        return
+
+    # or find the file path and write the code to that location
+    here = os.path.dirname(__file__)
+    path = os.path.join(here, "api", service)
+
+    if not os.path.exists(path):
+        click.echo("creating directory %s" % path)
+        mkdir(path)
+
+    file = os.path.join(path, "__init__.py")
+    click.echo("writing to file %s" % file)
+    with open(file, "w") as fd:
+        fd.write(code)
+    click.echo("done!")
 
 
 if __name__ == "__main__":
-    main()
+    generate()
