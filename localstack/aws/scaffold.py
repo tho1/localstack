@@ -76,7 +76,7 @@ class ShapeNode:
         shape = self.shape
 
         if isinstance(shape, StructureShape):
-            base = "TypedDict"
+            base = "TypedDict, total=False"
             members = ""
 
             if self.is_exception:
