@@ -201,6 +201,18 @@ def test_query_serializer_redshift_with_botocore():
     _botocore_serializer_integration_test("redshift", "DescribeClusterDbRevisions", parameters)
 
 
+def test_query_serializer_sqs_flattened_list_with_botocore():
+    response = {
+        "QueueUrls": [
+            "http://localhost:4566/000000000000/myqueue1",
+            "http://localhost:4566/000000000000/myqueue2",
+        ]
+    }
+    # TODO: currently this test fails because the XML response does not respect the "locationName" of flattened lists
+    #  (e.g., as here with sqs QueueUrlList). the response tag is "<QueueUrls>" instead of "<QueueUrl>".
+    _botocore_serializer_integration_test("sqs", "ListQueues", response)
+
+
 def test_query_protocol_error_serialization():
     # Load the appropriate service
     service = load_service("sqs")
