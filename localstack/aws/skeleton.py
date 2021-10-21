@@ -4,7 +4,7 @@ from typing import Any, Dict
 
 from botocore.model import ServiceModel
 
-from localstack.aws.api import RequestContext, ServiceRequestHandler
+from localstack.aws.api import HttpResponse, RequestContext, ServiceRequestHandler
 from localstack.aws.protocol.parser import create_parser
 from localstack.aws.protocol.serializer import create_serializer
 
@@ -31,7 +31,7 @@ class Skeleton:
         self.parser = create_parser(service)
         self.serializer = create_serializer(service)
 
-    def invoke(self, context: RequestContext):
+    def invoke(self, context: RequestContext) -> HttpResponse:
         parser = self.parser
         serializer = self.serializer
 

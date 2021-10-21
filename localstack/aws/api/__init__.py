@@ -1,4 +1,12 @@
-from .core import RequestContext, ServiceException, ServiceRequest, ServiceRequestHandler, handler
+from .core import (
+    HttpRequest,
+    HttpResponse,
+    RequestContext,
+    ServiceException,
+    ServiceRequest,
+    ServiceRequestHandler,
+    handler,
+)
 
 __all__ = [
     "RequestContext",
@@ -6,4 +14,6 @@ __all__ = [
     "ServiceRequest",
     "ServiceRequestHandler",
     "handler",
+    "HttpRequest",
+    "HttpResponse",
 ]
