@@ -118,7 +118,7 @@ class ServiceStateException(ServiceException):
 
 
 class Service(object):
-    def __init__(self, name, start, check=_default, listener=None, active=False, stop=None):
+    def __init__(self, name, start=None, check=_default, listener=None, active=False, stop=None):
         self.plugin_name = name
         self.start_function = start
         self.listener = listener
@@ -127,6 +127,16 @@ class Service(object):
         self.stop_function = stop
 
     def start(self, asynchronous):
+        if not self.start_function:
+            # fallback start method that simply adds the listener function to the list of proxy listeners if it exists
+            if not self.listener:
+                return
+
+            from localstack.services.infra import add_service_proxy_listener
+
+            add_service_proxy_listener(self.plugin_name, self.listener)
+            return
+
         kwargs = {"asynchronous": asynchronous}
         if self.listener:
             kwargs["update_listener"] = self.listener
