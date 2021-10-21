@@ -47,6 +47,8 @@ class ResponseSerializer(abc.ABC):
     def serialize_error_to_response(
         self, error: ServiceException, operation_model: OperationModel
     ) -> HttpResponse:
+        # TODO: support serializing exceptions that are not part of the spec (e.g., common API errors)
+
         serialized_response = self._create_default_response()
 
         # The shape name is equal to the class name (since the classes are generated based on the shape)

@@ -201,6 +201,14 @@ def sqs():
     )
 
 
+@aws_provider(api="sqs", name="custom")
+def sqs_custom():
+    from localstack.aws.proxy import AwsApiListener
+    from localstack.services.sqs.provider import SqsProvider
+
+    return Service("sqs", listener=AwsApiListener("sqs", SqsProvider()))
+
+
 @aws_provider()
 def ssm():
     from localstack.services.ssm import ssm_listener, ssm_starter
