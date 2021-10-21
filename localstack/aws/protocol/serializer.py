@@ -13,7 +13,7 @@ from botocore.serialize import ISO8601_MICRO
 from botocore.utils import conditionally_calculate_md5, parse_to_aware_datetime
 from moto.core.utils import gen_amzn_requestid_long
 
-from localstack.aws.api import ServiceException, HttpResponse
+from localstack.aws.api import HttpResponse, ServiceException
 
 # TODO also check if the current request ID is correct for all services. There might be different headers used:
 # - x-amzn-RequestId
@@ -30,22 +30,32 @@ class ResponseSerializer(abc.ABC):
 
     DEFAULT_ENCODING = "utf-8"
 
-    def serialize_to_response(self, response: dict, operation_model: OperationModel) -> HttpResponse:
+    def serialize_to_response(
+        self, response: dict, operation_model: OperationModel
+    ) -> HttpResponse:
         serialized_response = self._create_default_response()
         shape = operation_model.output_shape
         shape_members = shape.members
-        self._serialize_payload(response, serialized_response, shape, shape_members, operation_model)
-        serialized_response = self._prepare_additional_traits_in_response(serialized_response, operation_model)
+        self._serialize_payload(
+            response, serialized_response, shape, shape_members, operation_model
+        )
+        serialized_response = self._prepare_additional_traits_in_response(
+            serialized_response, operation_model
+        )
         return serialized_response
 
-    def serialize_error_to_response(self, error: ServiceException, operation_model: OperationModel) -> HttpResponse:
+    def serialize_error_to_response(
+        self, error: ServiceException, operation_model: OperationModel
+    ) -> HttpResponse:
         serialized_response = self._create_default_response()
 
         # The shape name is equal to the class name (since the classes are generated based on the shape)
         error_shape_name = error.__class__.__name__
 
         # Lookup the corresponding error shape in the operation model
-        shape = next(shape for shape in operation_model.error_shapes if shape.name == error_shape_name)
+        shape = next(
+            shape for shape in operation_model.error_shapes if shape.name == error_shape_name
+        )
         error_spec = shape.metadata.get("error", {})
 
         # Some specifications do not contain the httpStatusCode field.
@@ -58,8 +68,12 @@ class ResponseSerializer(abc.ABC):
         # The senderFault is only set if the "senderFault" is true
         # (there are no examples which show otherwise)
         sender_fault = error_spec.get("senderFault")
-        self._serialize_error(error, code, sender_fault, serialized_response, shape, operation_model)
-        serialized_response = self._prepare_additional_traits_in_response(serialized_response, operation_model)
+        self._serialize_error(
+            error, code, sender_fault, serialized_response, shape, operation_model
+        )
+        serialized_response = self._prepare_additional_traits_in_response(
+            serialized_response, operation_model
+        )
         return serialized_response
 
     def _serialize_payload(
@@ -72,9 +86,15 @@ class ResponseSerializer(abc.ABC):
     ) -> None:
         raise NotImplementedError
 
-    def _serialize_error(self, error: ServiceException, code: str, sender_fault: bool,
-                         serialized: HttpResponse, shape: Shape,
-                         operation_model: OperationModel) -> None:
+    def _serialize_error(
+        self,
+        error: ServiceException,
+        code: str,
+        sender_fault: bool,
+        serialized: HttpResponse,
+        shape: Shape,
+        operation_model: OperationModel,
+    ) -> None:
         raise NotImplementedError
 
     def _create_default_response(self) -> HttpResponse:
@@ -168,15 +188,25 @@ class BaseXMLResponseSerializer(ResponseSerializer):
             # member to they body.
             body_params = parameters.get(payload_member)
             if body_params is not None:
-                serialized["body"] = self._encode_payload(self._serialize_body_params(
-                    body_params, shape_members[payload_member], operation_model
-                ))
+                serialized["body"] = self._encode_payload(
+                    self._serialize_body_params(
+                        body_params, shape_members[payload_member], operation_model
+                    )
+                )
         else:
-            serialized["body"] = self._encode_payload(self._serialize_body_params(parameters, shape, operation_model))
+            serialized["body"] = self._encode_payload(
+                self._serialize_body_params(parameters, shape, operation_model)
+            )
 
-    def _serialize_error(self, error: ServiceException, code: str, sender_fault: bool,
-                         serialized: HttpResponse, shape: Shape,
-                         operation_model: OperationModel) -> None:
+    def _serialize_error(
+        self,
+        error: ServiceException,
+        code: str,
+        sender_fault: bool,
+        serialized: HttpResponse,
+        shape: Shape,
+        operation_model: OperationModel,
+    ) -> None:
         # FIXME handle error shapes with members
         # Check if we need to add a namespace
         attr = (
@@ -189,9 +219,13 @@ class BaseXMLResponseSerializer(ResponseSerializer):
         self._add_error_tags(code, error, error_tag, sender_fault)
         request_id = ElementTree.SubElement(root, "RequestId")
         request_id.text = gen_amzn_requestid_long()
-        serialized["body"] = self._encode_payload(ElementTree.tostring(root, encoding=self.DEFAULT_ENCODING))
+        serialized["body"] = self._encode_payload(
+            ElementTree.tostring(root, encoding=self.DEFAULT_ENCODING)
+        )
 
-    def _add_error_tags(self, code: str, error: ServiceException, error_tag: ElementTree.Element, sender_fault: bool) -> None:
+    def _add_error_tags(
+        self, code: str, error: ServiceException, error_tag: ElementTree.Element, sender_fault: bool
+    ) -> None:
         code_tag = ElementTree.SubElement(error_tag, "Code")
         code_tag.text = code
         message = str(error)
@@ -337,10 +371,15 @@ class BaseXMLResponseSerializer(ResponseSerializer):
 
 
 class RestXMLResponseSerializer(BaseXMLResponseSerializer):
-
-    def _serialize_error(self, error: ServiceException, code: str, sender_fault: bool,
-                         serialized: HttpResponse, shape: Shape,
-                         operation_model: OperationModel) -> None:
+    def _serialize_error(
+        self,
+        error: ServiceException,
+        code: str,
+        sender_fault: bool,
+        serialized: HttpResponse,
+        shape: Shape,
+        operation_model: OperationModel,
+    ) -> None:
         # It wouldn't be a spec if there wouldn't be any exceptions.
         # S3 errors look differently than other service's errors.
         if operation_model.name == "s3":
@@ -353,7 +392,9 @@ class RestXMLResponseSerializer(BaseXMLResponseSerializer):
             self._add_error_tags(code, error, root, sender_fault)
             request_id = ElementTree.SubElement(root, "RequestId")
             request_id.text = gen_amzn_requestid_long()
-            serialized["body"] = self._encode_payload(ElementTree.tostring(root, encoding=self.DEFAULT_ENCODING))
+            serialized["body"] = self._encode_payload(
+                ElementTree.tostring(root, encoding=self.DEFAULT_ENCODING)
+            )
         else:
             super()._serialize_error(error, code, sender_fault, serialized, shape, operation_model)
 

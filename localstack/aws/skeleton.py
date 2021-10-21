@@ -4,7 +4,7 @@ from typing import Any, Dict
 
 from botocore.model import ServiceModel
 
-from localstack.aws.api import HttpResponse, RequestContext, ServiceRequestHandler, ServiceException
+from localstack.aws.api import HttpResponse, RequestContext, ServiceException, ServiceRequestHandler
 from localstack.aws.protocol.parser import create_parser
 from localstack.aws.protocol.serializer import create_serializer
 

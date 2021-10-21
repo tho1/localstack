@@ -1,7 +1,7 @@
 from datetime import datetime
 
 import pytest
-from botocore.parsers import create_parser, ResponseParser
+from botocore.parsers import ResponseParser, create_parser
 from dateutil.tz import tzutc
 
 from localstack.aws.api import ServiceException
@@ -210,13 +210,13 @@ def test_query_protocol_error_serialization():
     # Use our serializer to serialize the response
     response_serializer = create_serializer(service)
     serialized_response = response_serializer.serialize_error_to_response(
-        response, service.operation_model('SendMessage')
+        response, service.operation_model("SendMessage")
     )
 
     # Use the parser from botocore to parse the serialized response
     response_parser: ResponseParser = create_parser(service.protocol)
     parsed_response = response_parser.parse(
-        serialized_response, service.operation_model('SendMessage').output_shape
+        serialized_response, service.operation_model("SendMessage").output_shape
     )
 
     # Check if the result is equal to the initial response params
