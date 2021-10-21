@@ -63,9 +63,6 @@ class ServiceRequestHandler:
         return self.fn(self, *args, **kwargs)
 
 
-DispatchTable = Dict[str, ServiceRequestHandler]
-
-
 def handler(operation: str = None, context: bool = True, expand: bool = True):
     def wrapper(fn):
         return ServiceRequestHandler(

@@ -1,14 +1,17 @@
 import inspect
 import logging
-from typing import Any
+from typing import Any, Dict
 
 from botocore.model import ServiceModel
 
-from localstack.aws.api import DispatchTable, RequestContext, ServiceRequestHandler
+from localstack.aws.api import RequestContext, ServiceRequestHandler
 from localstack.aws.protocol.parser import create_parser
 from localstack.aws.protocol.serializer import create_serializer
 
 LOG = logging.getLogger(__name__)
+
+
+DispatchTable = Dict[str, ServiceRequestHandler]
 
 
 class Skeleton:

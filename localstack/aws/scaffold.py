@@ -249,6 +249,8 @@ def generate_service_api(output, service: ServiceModel, doc=True):
 
 
 def main():
+    # TODO: user argparse
+
     # service = load_service("firehose")
     service = load_service("sqs")
     # service = load_service("comprehend", "2017-11-27")
@@ -259,7 +261,7 @@ def main():
     generate_service_api(output, service, doc=False)
 
     model = "model.py"
-    api = "api.py"
+    api = "core.py"
 
     "from .model import *"
 
