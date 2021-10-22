@@ -1,6 +1,7 @@
 import abc
 import base64
 import datetime
+import json
 import re
 from collections import defaultdict
 from typing import Any, List, Tuple
@@ -522,13 +523,106 @@ class RestXMLRequestParser(BaseRestRequestParser):
         return list(value)[0]
 
 
+class BaseJSONRequestParser(RequestParser):
+    TIMESTAMP_FORMAT = "unixtimestamp"
+
+    def _parse_structure(self, request, shape, value):
+        final_parsed = {}
+        if shape.is_document_type:
+            final_parsed = value
+        else:
+            member_shapes = shape.members
+            if value is None:
+                # If the comes across the wire as "null" (None in python),
+                # we should be returning this unchanged, instead of as an
+                # empty dict.
+                return None
+            final_parsed = {}
+            for member_name in member_shapes:
+                member_shape = member_shapes[member_name]
+                json_name = member_shape.serialization.get("name", member_name)
+                raw_value = value.get(json_name)
+                if raw_value is not None:
+                    final_parsed[member_name] = self._parse_shape(
+                        request, member_shapes[member_name], raw_value
+                    )
+        return final_parsed
+
+    def _parse_map(self, request, shape, value):
+        parsed = {}
+        key_shape = shape.key
+        value_shape = shape.value
+        for key, value in value.items():
+            actual_key = self._parse_shape(request, key_shape, key)
+            actual_value = self._parse_shape(request, value_shape, value)
+            parsed[actual_key] = actual_value
+        return parsed
+
+    def _parse_body_as_json(self, body_contents):
+        if not body_contents:
+            return {}
+        body = body_contents.decode(self.DEFAULT_ENCODING)
+        try:
+            original_parsed = json.loads(body)
+            return original_parsed
+        except ValueError:
+            # if the body cannot be parsed, include
+            # the literal string as the message
+            return {"message": body}
+
+    def _parse_boolean(self, request: HttpRequest, shape: Shape, node: bool) -> None:
+        return super()._noop_parser(request, shape, node)
+
+
+class JSONRequestParser(BaseJSONRequestParser):
+    """Response parser for the "json" protocol."""
+
+    def parse(self, request: HttpRequest) -> Tuple[OperationModel, Any]:
+        target = request["headers"]["X-Amz-Target"]
+        _, operation_name = target.split(".")
+        operation = self.service.operation_model(operation_name)
+        shape = operation.input_shape
+        final_parsed = self._do_parse(request, shape)
+        return operation, final_parsed
+
+    def _do_parse(self, request: HttpRequest, shape):
+        parsed = {}
+        if shape is not None:
+            event_name = shape.event_stream_name
+            if event_name:
+                parsed = self._handle_event_stream(request, shape, event_name)
+            else:
+                parsed = self._handle_json_body(request, request["body"], shape)
+        return parsed
+
+    def _handle_event_stream(self, response, shape, event_name):
+        # TODO handle event streams
+        return
+
+    def _handle_json_body(self, request: HttpRequest, raw_body, shape):
+        # The json.loads() gives us the primitive JSON types,
+        # but we need to traverse the parsed JSON data to convert
+        # to richer types (blobs, timestamps, etc.
+        parsed_json = self._parse_body_as_json(raw_body)
+        return self._parse_shape(request, shape, parsed_json)
+
+
+class RestJSONRequestParser(BaseRestRequestParser, BaseJSONRequestParser):
+    def _initial_body_parse(self, body_contents):
+        return self._parse_body_as_json(body_contents)
+
+
+class EC2RequestParser(QueryRequestParser):
+    pass
+
+
 def create_parser(service: ServiceModel) -> RequestParser:
     parsers = {
         "query": QueryRequestParser,
-        "json": None,  # TODO
-        "rest-json": None,  # TODO
+        "json": JSONRequestParser,
+        "rest-json": RestJSONRequestParser,
         "rest-xml": RestXMLRequestParser,
-        "ec2": None,  # TODO
+        "ec2": EC2RequestParser,
     }
 
     return parsers[service.protocol](service)

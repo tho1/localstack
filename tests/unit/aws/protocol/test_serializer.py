@@ -295,6 +295,235 @@ def test_restxml_protocol_custom_error_serialization():
     )
 
 
+def test_json_protocol_error_serialization():
+    class UserPoolTaggingException(ServiceException):
+        pass
+
+    exception = UserPoolTaggingException("Exception message!")
+    _botocore_error_serializer_integration_test(
+        "cognito-idp",
+        "CreateUserPool",
+        exception,
+        "UserPoolTaggingException",
+        400,
+        "Exception message!",
+    )
+
+
+def test_json_protocol_custom_error_serialization():
+    exception = CommonServiceException(
+        "APIAccessCensorship",
+        "You shall not access this API! Sincerly, your friendly neighbourhood firefighter.",
+        status_code=451,
+    )
+    _botocore_error_serializer_integration_test(
+        "cognito-idp",
+        "CreateUserPool",
+        exception,
+        "APIAccessCensorship",
+        451,
+        "You shall not access this API! Sincerly, your friendly neighbourhood firefighter.",
+    )
+
+
+def test_json_serializer_cognito_with_botocore():
+    parameters = {
+        "UserPool": {
+            "Id": "string",
+            "Name": "string",
+            "Policies": {
+                "PasswordPolicy": {
+                    "MinimumLength": 123,
+                    "RequireUppercase": True,
+                    "RequireLowercase": True,
+                    "RequireNumbers": True,
+                    "RequireSymbols": True,
+                    "TemporaryPasswordValidityDays": 123,
+                }
+            },
+            "LambdaConfig": {
+                "PreSignUp": "string",
+                "CustomMessage": "string",
+                "PostConfirmation": "string",
+                "PreAuthentication": "string",
+                "PostAuthentication": "string",
+                "DefineAuthChallenge": "string",
+                "CreateAuthChallenge": "string",
+                "VerifyAuthChallengeResponse": "string",
+                "PreTokenGeneration": "string",
+                "UserMigration": "string",
+                "CustomSMSSender": {"LambdaVersion": "V1_0", "LambdaArn": "string"},
+                "CustomEmailSender": {"LambdaVersion": "V1_0", "LambdaArn": "string"},
+                "KMSKeyID": "string",
+            },
+            "Status": "Enabled",
+            "LastModifiedDate": datetime(2015, 1, 1, tzinfo=tzutc()),
+            "CreationDate": datetime(2015, 1, 1, tzinfo=tzutc()),
+            "SchemaAttributes": [
+                {
+                    "Name": "string",
+                    "AttributeDataType": "String",
+                    "DeveloperOnlyAttribute": True,
+                    "Mutable": True,
+                    "Required": True,
+                    "NumberAttributeConstraints": {"MinValue": "string", "MaxValue": "string"},
+                    "StringAttributeConstraints": {"MinLength": "string", "MaxLength": "string"},
+                },
+            ],
+            "AutoVerifiedAttributes": [
+                "phone_number",
+            ],
+            "AliasAttributes": [
+                "phone_number",
+            ],
+            "UsernameAttributes": [
+                "phone_number",
+            ],
+            "SmsVerificationMessage": "string",
+            "EmailVerificationMessage": "string",
+            "EmailVerificationSubject": "string",
+            "VerificationMessageTemplate": {
+                "SmsMessage": "string",
+                "EmailMessage": "string",
+                "EmailSubject": "string",
+                "EmailMessageByLink": "string",
+                "EmailSubjectByLink": "string",
+                "DefaultEmailOption": "CONFIRM_WITH_LINK",
+            },
+            "SmsAuthenticationMessage": "string",
+            "MfaConfiguration": "OFF",
+            "DeviceConfiguration": {
+                "ChallengeRequiredOnNewDevice": True,
+                "DeviceOnlyRememberedOnUserPrompt": True,
+            },
+            "EstimatedNumberOfUsers": 123,
+            "EmailConfiguration": {
+                "SourceArn": "string",
+                "ReplyToEmailAddress": "string",
+                "EmailSendingAccount": "COGNITO_DEFAULT",
+                "From": "string",
+                "ConfigurationSet": "string",
+            },
+            "SmsConfiguration": {"SnsCallerArn": "string", "ExternalId": "string"},
+            "UserPoolTags": {"string": "string"},
+            "SmsConfigurationFailure": "string",
+            "EmailConfigurationFailure": "string",
+            "Domain": "string",
+            "CustomDomain": "string",
+            "AdminCreateUserConfig": {
+                "AllowAdminCreateUserOnly": True,
+                "UnusedAccountValidityDays": 123,
+                "InviteMessageTemplate": {
+                    "SMSMessage": "string",
+                    "EmailMessage": "string",
+                    "EmailSubject": "string",
+                },
+            },
+            "UserPoolAddOns": {"AdvancedSecurityMode": "OFF"},
+            "UsernameConfiguration": {"CaseSensitive": True},
+            "Arn": "string",
+            "AccountRecoverySetting": {
+                "RecoveryMechanisms": [
+                    {"Priority": 123, "Name": "verified_email"},
+                ]
+            },
+        }
+    }
+    _botocore_serializer_integration_test("cognito-idp", "DescribeUserPool", parameters)
+
+
+def test_restjson_protocol_error_serialization():
+    class ThrottledException(ServiceException):
+        pass
+
+    exception = ThrottledException("Exception message!")
+    _botocore_error_serializer_integration_test(
+        "xray",
+        "UpdateSamplingRule",
+        exception,
+        "ThrottledException",
+        429,
+        "Exception message!",
+    )
+
+
+def test_restjson_protocol_custom_error_serialization():
+    exception = CommonServiceException(
+        "APIAccessCensorship",
+        "You shall not access this API! Sincerly, your friendly neighbourhood firefighter.",
+        status_code=451,
+    )
+    _botocore_error_serializer_integration_test(
+        "xray",
+        "UpdateSamplingRule",
+        exception,
+        "APIAccessCensorship",
+        451,
+        "You shall not access this API! Sincerly, your friendly neighbourhood firefighter.",
+    )
+
+
+def test_restjson_serializer_xray_with_botocore():
+    parameters = {
+        "SamplingRuleRecord": {
+            "SamplingRule": {
+                "RuleName": "string",
+                "RuleARN": "123456789001234567890",
+                "ResourceARN": "123456789001234567890",
+                "Priority": 123,
+                "FixedRate": 123.0,
+                "ReservoirSize": 123,
+                "ServiceName": "string",
+                "ServiceType": "string",
+                "Host": "string",
+                "HTTPMethod": "string",
+                "URLPath": "string",
+                "Version": 123,
+                "Attributes": {"string": "string"},
+            },
+            "CreatedAt": datetime(2015, 1, 1, tzinfo=tzutc()),
+            "ModifiedAt": datetime(2015, 1, 1, tzinfo=tzutc()),
+        }
+    }
+
+    _botocore_serializer_integration_test("xray", "UpdateSamplingRule", parameters)
+
+
+def test_ec2_serializer_ec2_with_botocore():
+    parameters = {
+        "InstanceEventWindow": {
+            "InstanceEventWindowId": "string",
+            "TimeRanges": [
+                {
+                    "StartWeekDay": "sunday",
+                    "StartHour": 123,
+                    "EndWeekDay": "sunday",
+                    "EndHour": 123,
+                },
+            ],
+            "Name": "string",
+            "CronExpression": "string",
+            "AssociationTarget": {
+                "InstanceIds": [
+                    "string",
+                ],
+                "Tags": [
+                    {"Key": "string", "Value": "string"},
+                ],
+                "DedicatedHostIds": [
+                    "string",
+                ],
+            },
+            "State": "creating",
+            "Tags": [
+                {"Key": "string", "Value": "string"},
+            ],
+        }
+    }
+
+    _botocore_serializer_integration_test("ec2", "CreateInstanceEventWindow", parameters)
+
+
 # TODO Add additional tests (or even automate the creation)
 # - Go to the AWS CLI reference (https://docs.aws.amazon.com)
 # - Look at the CLI reference for APIs that use the protocol you want to test

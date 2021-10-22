@@ -2,6 +2,7 @@ import abc
 import base64
 import calendar
 import datetime
+import json
 from email.utils import formatdate
 from typing import Union
 from xml.etree import ElementTree
@@ -390,7 +391,15 @@ class BaseXMLResponseSerializer(ResponseSerializer):
         pass
 
 
-class RestXMLResponseSerializer(BaseXMLResponseSerializer):
+class BaseRestResponseSerializer(ResponseSerializer):
+    def _prepare_additional_traits_in_response(self, response, operation_model):
+        """Adds the request ID to the headers (in contrast to the body - as in the Query protocol)."""
+        response = super()._prepare_additional_traits_in_response(response, operation_model)
+        response["headers"]["x-amz-request-id"] = gen_amzn_requestid_long()
+        return response
+
+
+class RestXMLResponseSerializer(BaseRestResponseSerializer, BaseXMLResponseSerializer):
     def _serialize_error(
         self,
         error: ServiceException,
@@ -417,12 +426,6 @@ class RestXMLResponseSerializer(BaseXMLResponseSerializer):
             )
         else:
             super()._serialize_error(error, code, sender_fault, serialized, shape, operation_model)
-
-    def _prepare_additional_traits_in_response(self, response, operation_model):
-        """Adds the request ID to the headers (in contrast to the body - as in the Query protocol)."""
-        response = super()._prepare_additional_traits_in_response(response, operation_model)
-        response["headers"]["x-amz-request-id"] = gen_amzn_requestid_long()
-        return response
 
 
 class QueryResponseSerializer(BaseXMLResponseSerializer):
@@ -459,6 +462,145 @@ class QueryResponseSerializer(BaseXMLResponseSerializer):
         request_id.text = gen_amzn_requestid_long()
 
 
+class EC2ResponseSerializer(QueryResponseSerializer):
+    def _serialize_error(
+        self,
+        error: ServiceException,
+        code: str,
+        sender_fault: bool,
+        serialized: HttpResponse,
+        shape: Shape,
+        operation_model: OperationModel,
+    ) -> None:
+        # EC2 errors look like:
+        # <Response>
+        #   <Errors>
+        #     <Error>
+        #       <Code>InvalidInstanceID.Malformed</Code>
+        #       <Message>Invalid id: "1343124"</Message>
+        #     </Error>
+        #   </Errors>
+        #   <RequestID>12345</RequestID>
+        # </Response>
+        # This is different from QueryParser in that it's RequestID,
+        # not RequestId and that the Error is in another Errors tag.
+        attr = (
+            {"xmlns": operation_model.metadata.get("xmlNamespace")}
+            if "xmlNamespace" in operation_model.metadata
+            else None
+        )
+        root = ElementTree.Element("Errors", attr)
+        error_tag = ElementTree.SubElement(root, "Error")
+        self._add_error_tags(code, error, error_tag, sender_fault)
+        serialized["body"] = self._encode_payload(
+            ElementTree.tostring(root, encoding=self.DEFAULT_ENCODING)
+        )
+
+    def _prepare_additional_traits_in_xml(self, root: ElementTree.Element):
+        # Add the response metadata here (it's not defined in the specs)
+        response_metadata = ElementTree.SubElement(root, "ResponseMetadata")
+        request_id = ElementTree.SubElement(response_metadata, "RequestID")
+        request_id.text = gen_amzn_requestid_long()
+
+
+class JSONResponseSerializer(ResponseSerializer):
+    TIMESTAMP_FORMAT = "unixtimestamp"
+
+    def _serialize_error(
+        self,
+        error: ServiceException,
+        code: str,
+        sender_fault: bool,
+        serialized: HttpResponse,
+        shape: Shape,
+        operation_model: OperationModel,
+    ) -> None:
+        # FIXME handle error shapes with members
+        body = {"__type": code, "message": str(error)}
+        serialized["body"] = json.dumps(body).encode(self.DEFAULT_ENCODING)
+
+    def _serialize_payload(
+        self,
+        parameters: dict,
+        serialized: HttpResponse,
+        shape: Shape,
+        shape_members: dict,
+        operation_model: OperationModel,
+    ) -> None:
+        json_version = operation_model.metadata.get("jsonVersion")
+        if json_version is not None:
+            serialized["headers"] = {
+                "Content-Type": "application/x-amz-json-%s" % json_version,
+            }
+        body = {}
+        output_shape = operation_model.output_shape
+        if output_shape is not None:
+            self._serialize(body, parameters, output_shape)
+        serialized["body"] = json.dumps(body).encode(self.DEFAULT_ENCODING)
+
+    def _serialize(self, serialized, value, shape, key=None):
+        method = getattr(self, "_serialize_type_%s" % shape.type_name, self._default_serialize)
+        method(serialized, value, shape, key)
+
+    def _serialize_type_structure(self, serialized, value, shape, key):
+        if shape.is_document_type:
+            serialized[key] = value
+        else:
+            if key is not None:
+                # If a key is provided, this is a result of a recursive
+                # call so we need to add a new child dict as the value
+                # of the passed in serialized dict.  We'll then add
+                # all the structure members as key/vals in the new serialized
+                # dictionary we just created.
+                new_serialized = {}
+                serialized[key] = new_serialized
+                serialized = new_serialized
+            members = shape.members
+            for member_key, member_value in value.items():
+                member_shape = members[member_key]
+                if "name" in member_shape.serialization:
+                    member_key = member_shape.serialization["name"]
+                self._serialize(serialized, member_value, member_shape, member_key)
+
+    def _serialize_type_map(self, serialized, value, shape, key):
+        map_obj = {}
+        serialized[key] = map_obj
+        for sub_key, sub_value in value.items():
+            self._serialize(map_obj, sub_value, shape.value, sub_key)
+
+    def _serialize_type_list(self, serialized, value, shape, key):
+        list_obj = []
+        serialized[key] = list_obj
+        for list_item in value:
+            wrapper = {}
+            # The JSON list serialization is the only case where we aren't
+            # setting a key on a dict.  We handle this by using
+            # a __current__ key on a wrapper dict to serialize each
+            # list item before appending it to the serialized list.
+            self._serialize(wrapper, list_item, shape.member, "__current__")
+            list_obj.append(wrapper["__current__"])
+
+    def _default_serialize(self, serialized, value, shape, key):
+        serialized[key] = value
+
+    def _serialize_type_timestamp(self, serialized, value, shape, key):
+        serialized[key] = self._convert_timestamp_to_str(
+            value, shape.serialization.get("timestampFormat")
+        )
+
+    def _serialize_type_blob(self, serialized, value, shape, key):
+        serialized[key] = self._get_base64(value)
+
+    def _prepare_additional_traits_in_response(self, response, operation_model):
+        response["headers"]["x-amzn-requestid"] = gen_amzn_requestid_long()
+        response = super()._prepare_additional_traits_in_response(response, operation_model)
+        return response
+
+
+class RestJSONResponseSerializer(BaseRestResponseSerializer, JSONResponseSerializer):
+    pass
+
+
 def create_serializer(service: ServiceModel) -> ResponseSerializer:
     """
     Creates the right serializer for the given service model.
@@ -467,9 +609,9 @@ def create_serializer(service: ServiceModel) -> ResponseSerializer:
     """
     serializers = {
         "query": QueryResponseSerializer,
-        "json": None,  # TODO
-        "rest-json": None,  # TODO
+        "json": JSONResponseSerializer,
+        "rest-json": RestJSONResponseSerializer,
         "rest-xml": RestXMLResponseSerializer,
-        "ec2": None,  # TODO
+        "ec2": EC2ResponseSerializer,
     }
     return serializers[service.protocol]()

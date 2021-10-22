@@ -1,6 +1,8 @@
+from datetime import datetime
 from urllib.parse import urlencode
 
 from botocore.serialize import create_serializer
+from dateutil.tz import tzutc
 
 from localstack.aws.api import HttpRequest
 from localstack.aws.protocol.parser import QueryRequestParser, create_parser
@@ -191,7 +193,12 @@ def test_query_parser_flattened_list_structure():
 
 
 def _botocore_parser_integration_test(
-    service: str, action: str, method: str = None, request_uri: str = None, **kwargs
+    service: str,
+    action: str,
+    method: str = None,
+    request_uri: str = None,
+    headers: dict = None,
+    **kwargs
 ):
     # Load the appropriate service
     service = load_service(service)
@@ -200,6 +207,7 @@ def _botocore_parser_integration_test(
     serialized_request = serializer.serialize_to_request(kwargs, service.operation_model(action))
     serialized_request["path"] = request_uri
     serialized_request["method"] = method
+    serialized_request["headers"] = headers
 
     if service.protocol == "query":
         # Serialize the body as query parameter
@@ -306,6 +314,171 @@ def test_restxml_parser_route53_with_botocore():
         CallerReference="string",
         HostedZoneConfig={"Comment": "string", "PrivateZone": True},
         DelegationSetId="string",
+    )
+
+
+def test_json_parser_cognito_with_botocore():
+    _botocore_parser_integration_test(
+        service="cognito-idp",
+        action="CreateUserPool",
+        method="POST",
+        request_uri="/",
+        headers={"X-Amz-Target": "AWSCognitoIdentityProviderService.CreateUserPool"},
+        PoolName="string",
+        Policies={
+            "PasswordPolicy": {
+                "MinimumLength": 123,
+                "RequireUppercase": True,
+                "RequireLowercase": True,
+                "RequireNumbers": True,
+                "RequireSymbols": True,
+                "TemporaryPasswordValidityDays": 123,
+            }
+        },
+        LambdaConfig={
+            "PreSignUp": "12345678901234567890",
+            "CustomMessage": "12345678901234567890",
+            "PostConfirmation": "12345678901234567890",
+            "PreAuthentication": "12345678901234567890",
+            "PostAuthentication": "12345678901234567890",
+            "DefineAuthChallenge": "12345678901234567890",
+            "CreateAuthChallenge": "12345678901234567890",
+            "VerifyAuthChallengeResponse": "12345678901234567890",
+            "PreTokenGeneration": "12345678901234567890",
+            "UserMigration": "12345678901234567890",
+            "CustomSMSSender": {"LambdaVersion": "V1_0", "LambdaArn": "12345678901234567890"},
+            "CustomEmailSender": {"LambdaVersion": "V1_0", "LambdaArn": "12345678901234567890"},
+            "KMSKeyID": "12345678901234567890",
+        },
+        AutoVerifiedAttributes=[
+            "phone_number",
+        ],
+        AliasAttributes=[
+            "phone_number",
+        ],
+        UsernameAttributes=[
+            "phone_number",
+        ],
+        SmsVerificationMessage="string",
+        EmailVerificationMessage="string",
+        EmailVerificationSubject="string",
+        VerificationMessageTemplate={
+            "SmsMessage": "string",
+            "EmailMessage": "string",
+            "EmailSubject": "string",
+            "EmailMessageByLink": "string",
+            "EmailSubjectByLink": "string",
+            "DefaultEmailOption": "CONFIRM_WITH_LINK",
+        },
+        SmsAuthenticationMessage="string",
+        MfaConfiguration="OFF",
+        DeviceConfiguration={
+            "ChallengeRequiredOnNewDevice": True,
+            "DeviceOnlyRememberedOnUserPrompt": True,
+        },
+        EmailConfiguration={
+            "SourceArn": "12345678901234567890",
+            "ReplyToEmailAddress": "string",
+            "EmailSendingAccount": "COGNITO_DEFAULT",
+            "From": "string",
+            "ConfigurationSet": "string",
+        },
+        SmsConfiguration={"SnsCallerArn": "12345678901234567890", "ExternalId": "string"},
+        UserPoolTags={"string": "string"},
+        AdminCreateUserConfig={
+            "AllowAdminCreateUserOnly": True,
+            "UnusedAccountValidityDays": 123,
+            "InviteMessageTemplate": {
+                "SMSMessage": "string",
+                "EmailMessage": "string",
+                "EmailSubject": "string",
+            },
+        },
+        Schema=[
+            {
+                "Name": "string",
+                "AttributeDataType": "String",
+                "DeveloperOnlyAttribute": True,
+                "Mutable": True,
+                "Required": True,
+                "NumberAttributeConstraints": {"MinValue": "string", "MaxValue": "string"},
+                "StringAttributeConstraints": {"MinLength": "string", "MaxLength": "string"},
+            },
+        ],
+        UserPoolAddOns={"AdvancedSecurityMode": "OFF"},
+        UsernameConfiguration={"CaseSensitive": True},
+        AccountRecoverySetting={
+            "RecoveryMechanisms": [
+                {"Priority": 123, "Name": "verified_email"},
+            ]
+        },
+    )
+
+
+def test_restjson_parser_xray_with_botocore():
+    _botocore_parser_integration_test(
+        service="xray",
+        action="PutTelemetryRecords",
+        method="POST",
+        request_uri="/TelemetryRecords",
+        TelemetryRecords=[
+            {
+                "Timestamp": datetime(2015, 1, 1),
+                "SegmentsReceivedCount": 123,
+                "SegmentsSentCount": 123,
+                "SegmentsSpilloverCount": 123,
+                "SegmentsRejectedCount": 123,
+                "BackendConnectionErrors": {
+                    "TimeoutCount": 123,
+                    "ConnectionRefusedCount": 123,
+                    "HTTPCode4XXCount": 123,
+                    "HTTPCode5XXCount": 123,
+                    "UnknownHostCount": 123,
+                    "OtherCount": 123,
+                },
+            },
+        ],
+        EC2InstanceId="string",
+        Hostname="string",
+        ResourceARN="string",
+    )
+
+
+def test_ec2_parser_ec2_with_botocore():
+    _botocore_parser_integration_test(
+        service="ec2",
+        action="CreateImage",
+        BlockDeviceMappings=[
+            {
+                "DeviceName": "string",
+                "VirtualName": "string",
+                "Ebs": {
+                    "DeleteOnTermination": True,
+                    "Iops": 123,
+                    "SnapshotId": "string",
+                    "VolumeSize": 123,
+                    "VolumeType": "standard",
+                    "KmsKeyId": "string",
+                    "Throughput": 123,
+                    "OutpostArn": "string",
+                    "Encrypted": True,
+                },
+                "NoDevice": "string",
+            },
+        ],
+        Description="string",
+        DryRun=True | False,
+        InstanceId="string",
+        Name="string",
+        NoReboot=True | False,
+        TagSpecifications=[
+            {
+                "ResourceType": "capacity-reservation",
+                "Tags": [
+                    {"Key": "string", "Value": "string"},
+                ],
+            },
+        ],
     )
 
 
