@@ -250,6 +250,16 @@ def test_query_serializer_sqs_flattened_list_with_botocore():
     _botocore_serializer_integration_test("sqs", "ListQueues", response)
 
 
+def test_query_serializer_sqs_flattened_map_with_botocore():
+    response = {
+        "Attributes": {
+            "QueueArn": "arn:aws:sqs:us-east-1:000000000000:test-queue-01",
+            "DelaySeconds": "0",
+        }
+    }
+    _botocore_serializer_integration_test("sqs", "GetQueueAttributes", response)
+
+
 def test_query_protocol_error_serialization():
     exception = InvalidMessageContents("Exception message!")
     _botocore_error_serializer_integration_test(

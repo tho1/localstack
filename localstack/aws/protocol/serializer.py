@@ -343,10 +343,16 @@ class BaseXMLResponseSerializer(ResponseSerializer):
         #       <value>val1</value>
         #     </entry>
         #  </MyMap>
-        node = ElementTree.SubElement(xmlnode, name)
-        # TODO: handle flattened maps.
+
+        if shape.serialization.get("flattened"):
+            entries_node = xmlnode
+            entry_node_name = name
+        else:
+            entries_node = ElementTree.SubElement(xmlnode, name)
+            entry_node_name = "entry"
+
         for key, value in params.items():
-            entry_node = ElementTree.SubElement(node, "entry")
+            entry_node = ElementTree.SubElement(entries_node, entry_node_name)
             key_name = self._get_serialized_name(shape.key, default_name="key")
             val_name = self._get_serialized_name(shape.value, default_name="value")
             self._serialize(shape.key, key, entry_node, key_name)
