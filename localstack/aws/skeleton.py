@@ -4,7 +4,13 @@ from typing import Any, Dict
 
 from botocore.model import ServiceModel
 
-from localstack.aws.api import HttpResponse, RequestContext, ServiceException, ServiceRequestHandler
+from localstack.aws.api import (
+    CommonServiceException,
+    HttpResponse,
+    RequestContext,
+    ServiceException,
+    ServiceRequestHandler,
+)
 from localstack.aws.protocol.parser import create_parser
 from localstack.aws.protocol.serializer import create_serializer
 
@@ -51,8 +57,12 @@ class Skeleton:
             return serializer.serialize_to_response(result, operation)
         except ServiceException as e:
             return serializer.serialize_error_to_response(e, operation)
-        except NotImplementedError as e:
-            # TODO return a generic error message to avoid TF tests to break
-            # TODO https://github.com/localstack/localstack/blob/f41b25cc8d68e97ce8eacd4374ded4a8072e50f6/localstack/utils/aws/request_context.py#L164
-            # TODO maybe also already implement the sending of an analytics event?
-            raise e
+        except NotImplementedError:
+            message = (
+                f"API action '{operation.name}' for service '{operation.service_model.service_name}' "
+                f"not yet implemented"
+            )
+            LOG.info(message)
+            error = CommonServiceException("InternalFailure", message, status_code=501)
+            # TODO Publish an analytics event...
+            return serializer.serialize_error_to_response(error, operation)

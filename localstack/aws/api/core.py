@@ -21,7 +21,7 @@ class ServiceException(Exception):
     pass
 
 
-class CommonServiceException(Exception):
+class CommonServiceException(ServiceException):
     """
     An exception which can be raised within a service during its execution, even if it is not specified (i.e. it's not
     generated based on the service specification).
