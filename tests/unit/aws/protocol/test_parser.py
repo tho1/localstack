@@ -190,7 +190,9 @@ def test_query_parser_flattened_list_structure():
     }
 
 
-def _botocore_parser_integration_test(service: str, action: str, method: str = None, request_uri: str = None, **kwargs):
+def _botocore_parser_integration_test(
+    service: str, action: str, method: str = None, request_uri: str = None, **kwargs
+):
     # Load the appropriate service
     service = load_service(service)
     # Use the serializer from botocore to serialize the request params

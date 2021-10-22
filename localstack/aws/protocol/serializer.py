@@ -13,7 +13,7 @@ from botocore.serialize import ISO8601_MICRO
 from botocore.utils import conditionally_calculate_md5, parse_to_aware_datetime
 from moto.core.utils import gen_amzn_requestid_long
 
-from localstack.aws.api import HttpResponse, ServiceException
+from localstack.aws.api import CommonServiceException, HttpResponse, ServiceException
 
 # TODO also check if the current request ID is correct for all services. There might be different headers used:
 # - x-amzn-RequestId
@@ -48,26 +48,39 @@ class ResponseSerializer(abc.ABC):
         self, error: ServiceException, operation_model: OperationModel
     ) -> HttpResponse:
         serialized_response = self._create_default_response(operation_model)
+        if isinstance(error, CommonServiceException):
+            # Not all possible exceptions are contained in the service's specification.
+            # Therefore, service implementations can also throw a "CommonServiceException" to raise arbitrary /
+            # non-specified exceptions (where the developer needs to define the data which would usually be taken from
+            # the specification, like the "Code").
+            code = error.code
+            sender_fault = error.sender_fault
+            status_code = error.status_code
+            shape = None
+        else:
+            # It it's not a CommonServiceException, the exception is being serialized based on the specification
 
-        # The shape name is equal to the class name (since the classes are generated based on the shape)
-        error_shape_name = error.__class__.__name__
+            # The shape name is equal to the class name (since the classes are generated based on the shape)
+            error_shape_name = error.__class__.__name__
 
-        # Lookup the corresponding error shape in the operation model
-        shape = next(
-            shape for shape in operation_model.error_shapes if shape.name == error_shape_name
-        )
-        error_spec = shape.metadata.get("error", {})
+            # Lookup the corresponding error shape in the operation model
+            shape = next(
+                shape for shape in operation_model.error_shapes if shape.name == error_shape_name
+            )
+            error_spec = shape.metadata.get("error", {})
+            status_code = error_spec.get("httpStatusCode")
+
+            # If the code is not explicitly set, it's typically the shape's name
+            code = error_spec.get("code", shape.name)
+
+            # The senderFault is only set if the "senderFault" is true
+            # (there are no examples which show otherwise)
+            sender_fault = error_spec.get("senderFault")
 
         # Some specifications do not contain the httpStatusCode field.
         # These errors typically have the http status code 400.
-        serialized_response["status_code"] = error_spec.get("httpStatusCode", 400)
+        serialized_response["status_code"] = status_code or 400
 
-        # If the code is not explicitly set, it's typically the shape's name
-        code = error_spec.get("code", shape.name)
-
-        # The senderFault is only set if the "senderFault" is true
-        # (there are no examples which show otherwise)
-        sender_fault = error_spec.get("senderFault")
         self._serialize_error(
             error, code, sender_fault, serialized_response, shape, operation_model
         )
@@ -217,7 +230,7 @@ class BaseXMLResponseSerializer(ResponseSerializer):
         attr = (
             {"xmlns": operation_model.metadata.get("xmlNamespace")}
             if "xmlNamespace" in operation_model.metadata
-            else None
+            else {}
         )
         root = ElementTree.Element("ErrorResponse", attr)
         error_tag = ElementTree.SubElement(root, "Error")

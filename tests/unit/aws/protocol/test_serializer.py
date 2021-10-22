@@ -4,7 +4,7 @@ import pytest
 from botocore.parsers import ResponseParser, create_parser
 from dateutil.tz import tzutc
 
-from localstack.aws.api import ServiceException
+from localstack.aws.api import CommonServiceException, ServiceException
 from localstack.aws.protocol.serializer import create_serializer
 from localstack.aws.spec import load_service
 
@@ -39,6 +39,43 @@ def _botocore_serializer_integration_test(
     assert len(parsed_response["ResponseMetadata"]["RequestId"]) == 52
     del parsed_response["ResponseMetadata"]
     assert parsed_response == response
+
+
+def _botocore_error_serializer_integration_test(
+    service: str,
+    action: str,
+    exception: ServiceException,
+    code: str,
+    status_code: int,
+    message: str,
+):
+    # Load the appropriate service
+    service = load_service(service)
+
+    # Use our serializer to serialize the response
+    response_serializer = create_serializer(service)
+    serialized_response = response_serializer.serialize_error_to_response(
+        exception, service.operation_model(action)
+    )
+
+    # Use the parser from botocore to parse the serialized response
+    response_parser: ResponseParser = create_parser(service.protocol)
+    parsed_response = response_parser.parse(
+        serialized_response, service.operation_model(action).output_shape
+    )
+
+    # Check if the result is equal to the initial response params
+    assert "Error" in parsed_response
+    assert "Code" in parsed_response["Error"]
+    assert "Message" in parsed_response["Error"]
+    assert parsed_response["Error"]["Code"] == code
+    assert parsed_response["Error"]["Message"] == message
+
+    assert "ResponseMetadata" in parsed_response
+    assert "RequestId" in parsed_response["ResponseMetadata"]
+    assert len(parsed_response["ResponseMetadata"]["RequestId"]) == 52
+    assert "HTTPStatusCode" in parsed_response["ResponseMetadata"]
+    assert parsed_response["ResponseMetadata"]["HTTPStatusCode"] == status_code
 
 
 def test_rest_xml_serializer_cloudfront_with_botocore():
@@ -210,41 +247,52 @@ def test_query_serializer_sqs_flattened_list_with_botocore():
             "http://localhost:4566/000000000000/myqueue2",
         ]
     }
-    # TODO: currently this test fails because the XML response does not respect the "locationName" of flattened lists
-    #  (e.g., as here with sqs QueueUrlList). the response tag is "<QueueUrls>" instead of "<QueueUrl>".
     _botocore_serializer_integration_test("sqs", "ListQueues", response)
 
 
 def test_query_protocol_error_serialization():
-    # Load the appropriate service
-    service = load_service("sqs")
-
-    response = InvalidMessageContents("Exception message!")
-
-    # Use our serializer to serialize the response
-    response_serializer = create_serializer(service)
-    serialized_response = response_serializer.serialize_error_to_response(
-        response, service.operation_model("SendMessage")
+    exception = InvalidMessageContents("Exception message!")
+    _botocore_error_serializer_integration_test(
+        "sqs", "SendMessage", exception, "InvalidMessageContents", 400, "Exception message!"
     )
 
-    # Use the parser from botocore to parse the serialized response
-    response_parser: ResponseParser = create_parser(service.protocol)
-    parsed_response = response_parser.parse(
-        serialized_response, service.operation_model("SendMessage").output_shape
+
+def test_query_protocol_custom_error_serialization():
+    exception = CommonServiceException("InvalidParameterValue", "Parameter x was invalid!")
+    _botocore_error_serializer_integration_test(
+        "sqs", "SendMessage", exception, "InvalidParameterValue", 400, "Parameter x was invalid!"
     )
 
-    # Check if the result is equal to the initial response params
-    assert "Error" in parsed_response
-    assert "Code" in parsed_response["Error"]
-    assert "Message" in parsed_response["Error"]
-    assert parsed_response["Error"]["Code"] == "InvalidMessageContents"
-    assert parsed_response["Error"]["Message"] == "Exception message!"
 
-    assert "ResponseMetadata" in parsed_response
-    assert "RequestId" in parsed_response["ResponseMetadata"]
-    assert len(parsed_response["ResponseMetadata"]["RequestId"]) == 52
-    assert "HTTPStatusCode" in parsed_response["ResponseMetadata"]
-    assert parsed_response["ResponseMetadata"]["HTTPStatusCode"] == 400
+def test_restxml_protocol_error_serialization():
+    class CloudFrontOriginAccessIdentityAlreadyExists(ServiceException):
+        pass
+
+    exception = CloudFrontOriginAccessIdentityAlreadyExists("Exception message!")
+    _botocore_error_serializer_integration_test(
+        "cloudfront",
+        "CreateCloudFrontOriginAccessIdentity",
+        exception,
+        "CloudFrontOriginAccessIdentityAlreadyExists",
+        409,
+        "Exception message!",
+    )
+
+
+def test_restxml_protocol_custom_error_serialization():
+    exception = CommonServiceException(
+        "APIAccessCensorship",
+        "You shall not access this API! Sincerly, your friendly neighbourhood firefighter.",
+        status_code=451,
+    )
+    _botocore_error_serializer_integration_test(
+        "cloudfront",
+        "CreateCloudFrontOriginAccessIdentity",
+        exception,
+        "APIAccessCensorship",
+        451,
+        "You shall not access this API! Sincerly, your friendly neighbourhood firefighter.",
+    )
 
 
 # TODO Add additional tests (or even automate the creation)

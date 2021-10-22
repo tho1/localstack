@@ -1,4 +1,5 @@
 from .core import (
+    CommonServiceException,
     HttpRequest,
     HttpResponse,
     RequestContext,
@@ -11,6 +12,7 @@ from .core import (
 __all__ = [
     "RequestContext",
     "ServiceException",
+    "CommonServiceException",
     "ServiceRequest",
     "ServiceRequestHandler",
     "handler",
