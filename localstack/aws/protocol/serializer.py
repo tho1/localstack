@@ -309,7 +309,7 @@ class BaseXMLResponseSerializer(ResponseSerializer):
             # *current* node.
             if value is None:
                 # Don't serialize any param whose value is None.
-                return
+                continue
             if member_shape.serialization.get("xmlAttribute"):
                 # xmlAttributes must have a serialization name.
                 xml_attribute_name = member_shape.serialization["name"]

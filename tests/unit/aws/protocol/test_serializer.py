@@ -260,6 +260,21 @@ def test_query_serializer_sqs_flattened_map_with_botocore():
     _botocore_serializer_integration_test("sqs", "GetQueueAttributes", response)
 
 
+def test_query_serializer_sqs_flattened_list_map_with_botocore():
+    response = {
+        "Messages": [
+            {
+                "MessageId": "ac9baa5c-13b1-4206-aa28-2ac45ae168af",
+                "ReceiptHandle": "AQEBZ14sCjWJuot0T8G2Eg3S8C+sJGg+QRKYCJjfd8iiOsrPfUzbXSjlQquT9NZP1Mxxkcud3HcaxvS7I1gxoM9MSjbpenKgkti8TPCc7nQBUk9y6xXYWlhysjgAi9YjExUIxO2ozYZuwyksOvIxS4NZs2aBctyR74N3XjOO/t8GByAz2u7KR5vYJu418Y9apAuYB1n6ZZ6aE1NrjIK9mjGCKSqE3YxN5SNkKXf1zRwTUjq8cE73F7cK7DBXNFWBTZSYkLLnFg/QuqKh0dfwGgLseeKhHUxw2KiP9qH4kvXBn2UdeI8jkFMbPERiSf2KMrGKyMCtz3jL+YVRYkB4BB0hx15Brrgo/zhePXHbT692VxKF98MIMQc/v+dc6aewQZldjuq6ANrp4RM+LdjlTPg7ow==",
+                "Attributes": None,
+                "MD5OfBody": "13c0c73bbf11056450c43bf3159b3585",
+                "Body": '{"foo": "bared"}',
+            }
+        ]
+    }
+    _botocore_serializer_integration_test("sqs", "ReceiveMessage", response)
+
+
 def test_query_protocol_error_serialization():
     exception = InvalidMessageContents("Exception message!")
     _botocore_error_serializer_integration_test(
@@ -292,7 +307,7 @@ def test_restxml_protocol_error_serialization():
 def test_restxml_protocol_custom_error_serialization():
     exception = CommonServiceException(
         "APIAccessCensorship",
-        "You shall not access this API! Sincerly, your friendly neighbourhood firefighter.",
+        "You shall not access this API! Sincerely, your friendly neighbourhood firefighter.",
         status_code=451,
     )
     _botocore_error_serializer_integration_test(
@@ -301,7 +316,7 @@ def test_restxml_protocol_custom_error_serialization():
         exception,
         "APIAccessCensorship",
         451,
-        "You shall not access this API! Sincerly, your friendly neighbourhood firefighter.",
+        "You shall not access this API! Sincerely, your friendly neighbourhood firefighter.",
     )
 
 
@@ -323,7 +338,7 @@ def test_json_protocol_error_serialization():
 def test_json_protocol_custom_error_serialization():
     exception = CommonServiceException(
         "APIAccessCensorship",
-        "You shall not access this API! Sincerly, your friendly neighbourhood firefighter.",
+        "You shall not access this API! Sincerely, your friendly neighbourhood firefighter.",
         status_code=451,
     )
     _botocore_error_serializer_integration_test(
@@ -332,7 +347,7 @@ def test_json_protocol_custom_error_serialization():
         exception,
         "APIAccessCensorship",
         451,
-        "You shall not access this API! Sincerly, your friendly neighbourhood firefighter.",
+        "You shall not access this API! Sincerely, your friendly neighbourhood firefighter.",
     )
 
 
@@ -460,7 +475,7 @@ def test_restjson_protocol_error_serialization():
 def test_restjson_protocol_custom_error_serialization():
     exception = CommonServiceException(
         "APIAccessCensorship",
-        "You shall not access this API! Sincerly, your friendly neighbourhood firefighter.",
+        "You shall not access this API! Sincerely, your friendly neighbourhood firefighter.",
         status_code=451,
     )
     _botocore_error_serializer_integration_test(
@@ -469,7 +484,7 @@ def test_restjson_protocol_custom_error_serialization():
         exception,
         "APIAccessCensorship",
         451,
-        "You shall not access this API! Sincerly, your friendly neighbourhood firefighter.",
+        "You shall not access this API! Sincerely, your friendly neighbourhood firefighter.",
     )
 
 
