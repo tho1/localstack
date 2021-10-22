@@ -33,7 +33,7 @@ class ResponseSerializer(abc.ABC):
     def serialize_to_response(
         self, response: dict, operation_model: OperationModel
     ) -> HttpResponse:
-        serialized_response = self._create_default_response()
+        serialized_response = self._create_default_response(operation_model)
         shape = operation_model.output_shape
         shape_members = shape.members
         self._serialize_payload(
@@ -47,9 +47,7 @@ class ResponseSerializer(abc.ABC):
     def serialize_error_to_response(
         self, error: ServiceException, operation_model: OperationModel
     ) -> HttpResponse:
-        # TODO: support serializing exceptions that are not part of the spec (e.g., common API errors)
-
-        serialized_response = self._create_default_response()
+        serialized_response = self._create_default_response(operation_model)
 
         # The shape name is equal to the class name (since the classes are generated based on the shape)
         error_shape_name = error.__class__.__name__
@@ -99,9 +97,14 @@ class ResponseSerializer(abc.ABC):
     ) -> None:
         raise NotImplementedError
 
-    def _create_default_response(self) -> HttpResponse:
+    def _create_default_response(self, operation_model: OperationModel) -> HttpResponse:
         # Boilerplate default response dict to be used by subclasses as starting points.
-        return {"headers": {}, "body": b"", "status_code": 200}
+        # Uses the default HTTP response status code defined in the operation model (if defined)
+        return {
+            "headers": {},
+            "body": b"",
+            "status_code": operation_model.http.get("responseCode", 200),
+        }
 
     # Some extra utility methods subclasses can use.
 

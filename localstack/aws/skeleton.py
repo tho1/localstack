@@ -51,7 +51,8 @@ class Skeleton:
             return serializer.serialize_to_response(result, operation)
         except ServiceException as e:
             return serializer.serialize_error_to_response(e, operation)
-        except NotImplementedError:
+        except NotImplementedError as e:
             # TODO return a generic error message to avoid TF tests to break
-            # TODO check with waldemar how he implemented it in moto
-            pass
+            # TODO https://github.com/localstack/localstack/blob/f41b25cc8d68e97ce8eacd4374ded4a8072e50f6/localstack/utils/aws/request_context.py#L164
+            # TODO maybe also already implement the sending of an analytics event?
+            raise e

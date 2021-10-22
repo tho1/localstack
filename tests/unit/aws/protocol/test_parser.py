@@ -1,9 +1,9 @@
 from urllib.parse import urlencode
 
-from botocore.serialize import QuerySerializer
+from botocore.serialize import QuerySerializer, create_serializer
 
 from localstack.aws.api import HttpRequest
-from localstack.aws.protocol.parser import QueryRequestParser
+from localstack.aws.protocol.parser import QueryRequestParser, create_parser
 from localstack.aws.spec import load_service
 from localstack.utils.common import to_bytes
 
@@ -190,18 +190,19 @@ def test_query_parser_flattened_list_structure():
     }
 
 
-def _test_query_parser_botocore_integration_test(service: str, action: str, **kwargs):
+def _botocore_parser_integration_test(service: str, action: str, **kwargs):
     # Load the appropriate service
     service = load_service(service)
     # Use the serializer from botocore to serialize the request params
-    serializer = QuerySerializer()
+    serializer = create_serializer(service.protocol)
     serialized_request = serializer.serialize_to_request(kwargs, service.operation_model(action))
 
-    # Serialize the body as query parameter
-    serialized_request["body"] = urlencode(serialized_request["body"])
+    if service.protocol == "query":
+        # Serialize the body as query parameter
+        serialized_request["body"] = urlencode(serialized_request["body"])
 
     # Use our parser to parse the serialized body
-    parser = QueryRequestParser(service)
+    parser = create_parser(service)
     operation_model, parsed_request = parser.parse(serialized_request)
 
     # Check if the result is equal to the initial params
@@ -209,7 +210,7 @@ def _test_query_parser_botocore_integration_test(service: str, action: str, **kw
 
 
 def test_query_parser_sqs_with_botocore():
-    _test_query_parser_botocore_integration_test(
+    _botocore_parser_integration_test(
         service="sqs",
         action="SendMessage",
         QueueUrl="string",
@@ -247,7 +248,7 @@ def test_query_parser_sqs_with_botocore():
 
 
 def test_query_parser_cloudformation_with_botocore():
-    _test_query_parser_botocore_integration_test(
+    _botocore_parser_integration_test(
         service="cloudformation",
         action="CreateStack",
         StackName="string",
@@ -278,7 +279,7 @@ def test_query_parser_cloudformation_with_botocore():
         ResourceTypes=[
             "string",
         ],
-        RoleARN="string",
+        RoleARN="12345678901234567890",
         OnFailure="DO_NOTHING",
         StackPolicyBody="string",
         StackPolicyURL="string",
@@ -287,6 +288,18 @@ def test_query_parser_cloudformation_with_botocore():
         ],
         ClientRequestToken="string",
         EnableTerminationProtection=False,
+    )
+
+
+def test_restxml_parser_route53_with_botocore():
+    _botocore_parser_integration_test(
+        service="route53",
+        action="CreateHostedZone",
+        Name="string",
+        VPC={"VPCRegion": "us-east-1", "VPCId": "string"},
+        CallerReference="string",
+        HostedZoneConfig={"Comment": "string", "PrivateZone": True},
+        DelegationSetId="string",
     )
 
 

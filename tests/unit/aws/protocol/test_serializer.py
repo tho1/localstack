@@ -13,7 +13,9 @@ class InvalidMessageContents(ServiceException):
     pass
 
 
-def _botocore_serializer_integration_test(service: str, action: str, response: dict):
+def _botocore_serializer_integration_test(
+    service: str, action: str, response: dict, status_code=200
+):
     # Load the appropriate service
     service = load_service(service)
 
@@ -32,7 +34,7 @@ def _botocore_serializer_integration_test(service: str, action: str, response: d
     # Check if the result is equal to the initial response params
     assert "ResponseMetadata" in parsed_response
     assert "HTTPStatusCode" in parsed_response["ResponseMetadata"]
-    assert parsed_response["ResponseMetadata"]["HTTPStatusCode"] == 200
+    assert parsed_response["ResponseMetadata"]["HTTPStatusCode"] == status_code
     assert "RequestId" in parsed_response["ResponseMetadata"]
     assert len(parsed_response["ResponseMetadata"]["RequestId"]) == 52
     del parsed_response["ResponseMetadata"]
@@ -74,7 +76,7 @@ def test_rest_xml_serializer_route53_with_botocore():
         },
         "DelegationSet": {"NameServers": ["dns.localhost.localstack.cloud"]},
     }
-    _botocore_serializer_integration_test("route53", "CreateHostedZone", parameters)
+    _botocore_serializer_integration_test("route53", "CreateHostedZone", parameters, 201)
 
 
 def test_rest_xml_serializer_s3_with_botocore():
