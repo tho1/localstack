@@ -308,10 +308,12 @@ class BaseXMLResponseSerializer(ResponseSerializer):
     ) -> None:
         member_shape = shape.member
         if shape.serialization.get("flattened"):
-            element_name = name
+            # If the list is flattened, either take the member's "name" or the name of the usual name for the parent
+            # element for the children.
+            element_name = self._get_serialized_name(member_shape, name)
             list_node = xmlnode
         else:
-            element_name = member_shape.serialization.get("name", "member")
+            element_name = self._get_serialized_name(member_shape, "member")
             list_node = ElementTree.SubElement(xmlnode, name)
         for item in params:
             self._serialize(member_shape, item, list_node, element_name)
