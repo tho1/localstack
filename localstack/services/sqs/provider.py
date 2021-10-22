@@ -1,17 +1,21 @@
 import logging
 import random
 import re
+import string
+import threading
 from queue import Empty
 from queue import Queue as FifoQueue
 from typing import Dict, List, NamedTuple
 
-from localstack.aws.api import RequestContext, handler
+from localstack.aws.api import CommonServiceException, RequestContext, handler
 from localstack.aws.api.sqs import (
     AttributeNameList,
     BoxedInteger,
     CreateQueueResult,
+    GetQueueAttributesResult,
     GetQueueUrlResult,
     Integer,
+    InvalidAttributeName,
     ListQueuesResult,
     Message,
     MessageAttributeNameList,
@@ -29,31 +33,39 @@ from localstack.aws.api.sqs import (
     Token,
 )
 from localstack.config import get_edge_url
-from localstack.utils.common import md5
+from localstack.utils.common import long_uid, md5, now
 
 LOG = logging.getLogger(__name__)
 
 
-def get_random_hex(length=8):
-    chars = list(range(10)) + ["a", "b", "c", "d", "e", "f"]
-    return "".join(str(random.choice(chars)) for x in range(length))
+def generate_message_id():
+    return long_uid()
 
 
-def get_random_message_id():
-    return "{0}-{1}-{2}-{3}-{4}".format(
-        get_random_hex(8),
-        get_random_hex(4),
-        get_random_hex(4),
-        get_random_hex(4),
-        get_random_hex(12),
-    )
+def generate_receipt_handle():
+    # http://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/ImportantIdentifiers.html#ImportantIdentifiers-receipt-handles
+    return "".join(random.choices(string.ascii_letters + string.digits, k=172)) + "="
+
+
+class InvalidParameterValues(CommonServiceException):
+    def __init__(self, message):
+        super().__init__("InvalidParameterValues", message, 400, True)
+
+
+class NonExistentQueue(CommonServiceException):
+    def __init__(self):
+        # TODO: not sure if this is really how AWS behaves
+        super().__init__(
+            "AWS.SimpleQueueService.NonExistentQueue",
+            "The specified queue does not exist for this wsdl version.",
+            status_code=400,
+        )
 
 
 def assert_queue_name(queue_name: str):
     if not re.match(r"^[a-zA-Z0-9_-]{1,80}$", queue_name):
-        # FIXME: InvalidParameterValues is an exception that is not defined in the spec
-        raise ValueError(
-            "Can only include alphanumeric characters, hyphens, or underscores. 1 to 80 in length",
+        raise InvalidParameterValues(
+            "Can only include alphanumeric characters, hyphens, or underscores. 1 to 80 in length"
         )
 
 
@@ -73,9 +85,27 @@ class SqsQueue:
     def __init__(self, key: QueueKey, attributes=None, tags=None) -> None:
         super().__init__()
         self.key = key
-        self.attributes = attributes or dict()
         self.tags = tags or dict()
         self.messages = FifoQueue()
+
+        self.attributes = self.default_attributes()
+        if attributes:
+            self.attributes.update(attributes)
+
+    def default_attributes(self) -> QueueAttributeMap:
+        return {
+            QueueAttributeName.QueueArn: self.arn,
+            QueueAttributeName.ApproximateNumberOfMessages: "0",
+            QueueAttributeName.ApproximateNumberOfMessagesNotVisible: "0",
+            QueueAttributeName.ApproximateNumberOfMessagesDelayed: "0",
+            QueueAttributeName.CreatedTimestamp: str(now()),
+            QueueAttributeName.LastModifiedTimestamp: str(now()),
+            QueueAttributeName.VisibilityTimeout: "30",
+            QueueAttributeName.MaximumMessageSize: "262144",
+            QueueAttributeName.MessageRetentionPeriod: "345600",
+            QueueAttributeName.DelaySeconds: "0",
+            QueueAttributeName.ReceiveMessageWaitTimeSeconds: "0",
+        }
 
     @property
     def name(self):
@@ -83,7 +113,7 @@ class SqsQueue:
 
     @property
     def arn(self) -> str:
-        return ""
+        return f"arn:aws:sqs:{self.key.region}:{self.key.account_id}:{self.key.name}"
 
     @property
     def url(self) -> str:
@@ -95,6 +125,8 @@ class SqsQueue:
 
 
 class SqsProvider(SqsApi):
+    # TODO: thread safety
+
     queues: Dict[QueueKey, SqsQueue]
     queue_url_index: Dict[str, SqsQueue]
 
@@ -128,9 +160,7 @@ class SqsProvider(SqsApi):
         if k in self.queues:
             raise QueueNameExists(queue_name)
 
-        queue = SqsQueue(k)
-        queue.tags = tags
-        queue.attributes = attributes
+        queue = SqsQueue(k, attributes, tags)
         self._add_queue(queue)
 
         return CreateQueueResult(QueueUrl=queue.url)
@@ -169,14 +199,46 @@ class SqsProvider(SqsApi):
                     continue
             urls.append(queue.url)
 
-        LOG.info("list queues: %s", urls)
+        if max_results:
+            urls = urls[:max_results]
+
         return ListQueuesResult(QueueUrls=urls)
 
+    @handler("DeleteQueue")
     def delete_queue(self, context: RequestContext, queue_url: String) -> None:
         if queue_url not in self.queue_url_index:
-            raise QueueDoesNotExist(queue_url)
+            raise NonExistentQueue()
 
-        pass
+        self._remove_queue_by_url(queue_url)
+
+    @handler("GetQueueAttributes")
+    def get_queue_attributes(
+        self, context: RequestContext, queue_url: String, attribute_names: AttributeNameList = None
+    ) -> GetQueueAttributesResult:
+
+        if queue_url not in self.queue_url_index:
+            raise NonExistentQueue()
+
+        queue = self.queue_url_index[queue_url]
+
+        LOG.info("getting queue attributes: %s", attribute_names)
+        if not attribute_names:
+            return GetQueueAttributesResult(Attributes=dict())
+
+        if QueueAttributeName.All in attribute_names:
+            return GetQueueAttributesResult(Attributes=queue.attributes)
+
+        result: Dict[QueueAttributeName, str] = dict()
+
+        for attr in attribute_names:
+            try:
+                getattr(QueueAttributeName, attr)
+            except AttributeError:
+                raise InvalidAttributeName("Unknown attribute %s." % attr)
+
+            result[attr] = queue.attributes.get(attr)
+
+        return GetQueueAttributesResult(Attributes=result)
 
     @handler("SendMessage")
     def send_message(
@@ -185,23 +247,20 @@ class SqsProvider(SqsApi):
         queue_url: String,
         message_body: String,
         delay_seconds: Integer = None,
-        message_attributes: MessageBodyAttributeMap = None,
-        message_system_attributes: MessageBodySystemAttributeMap = None,
-        message_deduplication_id: String = None,
-        message_group_id: String = None,
+        message_attributes: MessageBodyAttributeMap = None,  # TODO
+        message_system_attributes: MessageBodySystemAttributeMap = None,  # TODO
+        message_deduplication_id: String = None,  # TODO
+        message_group_id: String = None,  # TODO
     ) -> SendMessageResult:
 
         if queue_url not in self.queue_url_index:
             # FIXME: cannot return exception that aren't in the spec
-            raise QueueDoesNotExist("The specified queue does not exist for this wsdl version.")
+            raise NonExistentQueue()
 
         queue = self.queue_url_index[queue_url]
 
-        delay_seconds = delay_seconds or queue.attributes.get(QueueAttributeName.DelaySeconds)
-        # TODO: implement delay_seconds
-
         message: Message = Message(
-            MessageId=get_random_message_id(),
+            MessageId=generate_message_id(),
             MD5OfBody=md5(message_body),
             Body=message_body,
             Attributes=message_system_attributes,
@@ -209,12 +268,17 @@ class SqsProvider(SqsApi):
             MessageAttributes=message_attributes,
         )
 
-        queue.messages.put_nowait(message)
+        delay_seconds = delay_seconds or queue.attributes.get(QueueAttributeName.DelaySeconds, 0)
+        if delay_seconds:
+            # FIXME: this is a pretty bad implementation (one thread per message...)
+            threading.Timer(int(delay_seconds), queue.messages.put_nowait, args=(message,)).start()
+        else:
+            queue.messages.put_nowait(message)
 
         return SendMessageResult(
             MessageId=message["MessageId"],
             MD5OfMessageBody=message["MD5OfBody"],
-            MD5OfMessageAttributes=message["MD5OfMessageAttributes"],
+            MD5OfMessageAttributes=None,  # TODO
             SequenceNumber=None,  # TODO
             MD5OfMessageSystemAttributes=None,  # TODO
         )
@@ -250,6 +314,7 @@ class SqsProvider(SqsApi):
                     msg = queue.messages.get(timeout=wait_time_seconds)
                 except Empty:
                     break
+            msg["ReceiptHandle"] = generate_receipt_handle()
             messages.append(msg)
             num -= 1
 
