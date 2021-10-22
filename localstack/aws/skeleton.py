@@ -13,6 +13,7 @@ from localstack.aws.api import (
 )
 from localstack.aws.protocol.parser import create_parser
 from localstack.aws.protocol.serializer import create_serializer
+from localstack.utils import analytics
 
 LOG = logging.getLogger(__name__)
 
@@ -58,11 +59,17 @@ class Skeleton:
         except ServiceException as e:
             return serializer.serialize_error_to_response(e, operation)
         except NotImplementedError:
+            action_name = operation.name
+            service_name = operation.service_model.service_name
             message = (
-                f"API action '{operation.name}' for service '{operation.service_model.service_name}' "
-                f"not yet implemented"
+                f"API action '{action_name}' for service '{service_name}' " f"not yet implemented"
             )
             LOG.info(message)
             error = CommonServiceException("InternalFailure", message, status_code=501)
-            # TODO Publish an analytics event...
+
+            # record event
+            analytics.log.event(
+                "services_notimplemented", payload={"s": service_name, "a": action_name}
+            )
+
             return serializer.serialize_error_to_response(error, operation)

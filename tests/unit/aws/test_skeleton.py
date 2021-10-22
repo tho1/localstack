@@ -86,14 +86,6 @@ class TestSqsApi:
         message_deduplication_id: String = None,
         message_group_id: String = None,
     ) -> SendMessageResult:
-        print(f"context: {context}")
-        print(f"queue_url: {queue_url}")
-        print(f"message_body: {message_body}")
-        print(f"delay_seconds: {delay_seconds}")
-        print(f"message_attributes: {message_attributes}")
-        print(f"message_system_attributes: {message_system_attributes}")
-        print(f"message_deduplication_id: {message_deduplication_id}")
-        print(f"message_group_id: {message_group_id}")
         return {
             "MD5OfMessageBody": "String",
             "MD5OfMessageAttributes": "String",
