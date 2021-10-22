@@ -1,6 +1,6 @@
 from urllib.parse import urlencode
 
-from botocore.serialize import QuerySerializer, create_serializer
+from botocore.serialize import create_serializer
 
 from localstack.aws.api import HttpRequest
 from localstack.aws.protocol.parser import QueryRequestParser, create_parser
@@ -190,12 +190,14 @@ def test_query_parser_flattened_list_structure():
     }
 
 
-def _botocore_parser_integration_test(service: str, action: str, **kwargs):
+def _botocore_parser_integration_test(service: str, action: str, method: str = None, request_uri: str = None, **kwargs):
     # Load the appropriate service
     service = load_service(service)
     # Use the serializer from botocore to serialize the request params
     serializer = create_serializer(service.protocol)
     serialized_request = serializer.serialize_to_request(kwargs, service.operation_model(action))
+    serialized_request["path"] = request_uri
+    serialized_request["method"] = method
 
     if service.protocol == "query":
         # Serialize the body as query parameter
@@ -295,6 +297,8 @@ def test_restxml_parser_route53_with_botocore():
     _botocore_parser_integration_test(
         service="route53",
         action="CreateHostedZone",
+        method="POST",
+        request_uri="/2013-04-01/hostedzone",
         Name="string",
         VPC={"VPCRegion": "us-east-1", "VPCId": "string"},
         CallerReference="string",
