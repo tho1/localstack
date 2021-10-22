@@ -70,7 +70,7 @@ class ShapeNode:
 
         return []
 
-    def print_declaration(self, output):
+    def print_declaration(self, output, doc=True):
         code = ""
 
         shape = self.shape
@@ -93,7 +93,21 @@ class ShapeNode:
                 else:
                     members += f"    {k}: Optional[{v.name}]\n"
 
-            code = f"""class {shape.name}({base}):\n{members}"""
+            code = f"class {shape.name}({base}):\n"
+
+            if doc:
+                html = shape.documentation
+                import pypandoc
+
+                doc = pypandoc.convert_text(html, "rst", format="html")
+                rst = doc.strip()
+                if rst:
+                    code += '    """'
+                    code += f"{doc.strip()}\n"
+                    code += '    """\n'
+
+            code += f"{members}\n"
+
         elif isinstance(shape, ListShape):
             code = f"{shape.name} = List[{shape.member.name}]\n"
         elif isinstance(shape, MapShape):
@@ -145,7 +159,7 @@ class ShapeNode:
         return 3
 
 
-def generate_service_types(output, service: ServiceModel):
+def generate_service_types(output, service: ServiceModel, doc=True):
     output.write("from typing import Dict, List, Optional, TypedDict\n")
     output.write("\n")
     output.write(
@@ -180,7 +194,7 @@ def generate_service_types(output, service: ServiceModel):
         dependencies = [dep for dep in node.dependencies if dep not in printed]
 
         if not dependencies:
-            node.print_declaration(output)
+            node.print_declaration(output, doc=doc)
             printed.add(name)
         else:
             stack.append(name)
@@ -236,7 +250,7 @@ def generate_service_api(output, service: ServiceModel, doc=True):
             import pypandoc
 
             doc = pypandoc.convert_text(html, "rst", format="html")
-            output.write('        """\n')
+            output.write('        """')
             output.write(f"{doc.strip()}\n")
             output.write("\n")
 
@@ -249,11 +263,11 @@ def generate_service_api(output, service: ServiceModel, doc=True):
 
             # return value
             if operation.output_shape:
-                output.write(f":returns: {operation.output_shape.name}")
+                output.write(f":returns: {operation.output_shape.name}\n")
 
             # errors
             for error in operation.error_shapes:
-                output.write(f":raises: {error.name}\n")
+                output.write(f":raises {error.name}:\n")
 
             output.write('        """\n')
 
@@ -264,11 +278,11 @@ def generate_service_api(output, service: ServiceModel, doc=True):
 @click.argument("service", type=str)
 @click.option("--doc/--no-doc", default=False, help="whether or not to generate docstrings")
 @click.option(
-    "--write/--stdout",
+    "--save/--print",
     default=False,
-    help="whether or not to write the result into the api directory",
+    help="whether or not to save the result into the api directory",
 )
-def generate(service: str, doc: bool, write: bool):
+def generate(service: str, doc: bool, save: bool):
     """
     Generate types and API stubs for a given AWS service.
 
@@ -282,7 +296,7 @@ def generate(service: str, doc: bool, write: bool):
         raise ClickException("unknown service %s" % service)
 
     output = io.StringIO()
-    generate_service_types(output, model)
+    generate_service_types(output, model, doc=doc)
     generate_service_api(output, model, doc=doc)
 
     code = output.getvalue()
@@ -295,7 +309,7 @@ def generate(service: str, doc: bool, write: bool):
     except Exception:
         pass
 
-    if not write:
+    if not save:
         # either just print the code to stdout
         click.echo(code)
         return
