@@ -54,6 +54,8 @@ class Skeleton:
         try:
             # Call the appropriate handler
             result = handler.__call__(self.delegate, context, instance)
+            if result is None:
+                result = dict()
             # Serialize result dict to an HTTPResponse and return it
             return serializer.serialize_to_response(result, operation)
         except ServiceException as e:

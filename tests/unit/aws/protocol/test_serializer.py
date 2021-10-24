@@ -240,6 +240,16 @@ def test_query_serializer_redshift_with_botocore():
     _botocore_serializer_integration_test("redshift", "DescribeClusterDbRevisions", parameters)
 
 
+def test_query_serializer_sqs_empty_return_shape_with_botocore():
+    # TODO: handle output shapes that are None
+    # this is what an empty response looks like:
+    # <?xml version="1.0"?>
+    # <SetQueueAttributesResponse xmlns="http://queue.amazonaws.com/doc/2012-11-05/">
+    #   <ResponseMetadata><RequestId>139fa091-dc0e-5df3-9823-f97e5bd6469b</RequestId></ResponseMetadata>
+    # </SetQueueAttributesResponse>
+    _botocore_serializer_integration_test("sqs", "SetQueueAttributes", {})
+
+
 def test_query_serializer_sqs_flattened_list_with_botocore():
     response = {
         "QueueUrls": [

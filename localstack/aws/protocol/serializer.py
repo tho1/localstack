@@ -36,6 +36,11 @@ class ResponseSerializer(abc.ABC):
     ) -> HttpResponse:
         serialized_response = self._create_default_response(operation_model)
         shape = operation_model.output_shape
+
+        if shape is None:
+            # TODO: some operations have no output shape (e.g., sqs.SetQueueAttributes)
+            pass
+
         shape_members = shape.members
         self._serialize_payload(
             response, serialized_response, shape, shape_members, operation_model
