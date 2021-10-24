@@ -7,11 +7,13 @@ import string
 import threading
 from queue import Empty
 from queue import Queue as FifoQueue
-from typing import Dict, List, NamedTuple
+from typing import Dict, List, NamedTuple, Set
 
-from localstack.aws.api import CommonServiceException, RequestContext, handler
+from localstack.aws.api import CommonServiceException, RequestContext
 from localstack.aws.api.sqs import (
+    ActionNameList,
     AttributeNameList,
+    AWSAccountIdList,
     BoxedInteger,
     CreateQueueResult,
     GetQueueAttributesResult,
@@ -34,9 +36,11 @@ from localstack.aws.api.sqs import (
     SendMessageResult,
     SqsApi,
     String,
+    TagKeyList,
     TagMap,
     Token,
 )
+from localstack.aws.spec import load_service
 from localstack.config import get_edge_url
 from localstack.utils.common import long_uid, md5, now
 
@@ -80,12 +84,20 @@ class QueueKey(NamedTuple):
     name: str
 
 
+class Permission(NamedTuple):
+    # TODO: just a placeholder for real policies
+    label: str
+    account_id: str
+    action: str
+
+
 class SqsQueue:
     key: QueueKey
 
     attributes: QueueAttributeMap
     tags: TagMap
     message: List[Message]
+    permissions: Set[Permission]
 
     purge_in_progress: bool
 
@@ -100,6 +112,7 @@ class SqsQueue:
             self.attributes.update(attributes)
 
         self.purge_in_progress = False
+        self.permissions = set()
 
     def default_attributes(self) -> QueueAttributeMap:
         return {
@@ -127,6 +140,10 @@ class SqsQueue:
         return self.key.name
 
     @property
+    def owner(self):
+        return self.key.account_id
+
+    @property
     def arn(self) -> str:
         return f"arn:aws:sqs:{self.key.region}:{self.key.account_id}:{self.key.name}"
 
@@ -145,11 +162,12 @@ class SqsProvider(SqsApi):
 
     LIMITATIONS:
         - Calculation of message attribute MD5 hash.
-        - VisibilityTimeout
+        - Message visiibility
         - Message deletion
         - Pagination of results (NextToken)
         - Sequence numbering
         - Delivery guarantees
+        - Permissions are not real IAM policies
     """
 
     queues: Dict[QueueKey, SqsQueue]
@@ -166,12 +184,6 @@ class SqsProvider(SqsApi):
             self.queues[queue.key] = queue
             self.queue_url_index[queue.url] = queue
 
-    def _remove_queue_by_url(self, queue_url: str):
-        with self._mutex:
-            queue = self.queue_url_index[queue_url]
-            del self.queues[queue.key]
-            del self.queue_url_index[queue_url]
-
     def _require_queue_by_url(self, queue_url: str) -> SqsQueue:
         """
         Returns the queue for the given url, or raises a NonExistentQueue error.
@@ -186,7 +198,6 @@ class SqsProvider(SqsApi):
             except KeyError:
                 raise NonExistentQueue()
 
-    @handler("CreateQueue")
     def create_queue(
         self,
         context: RequestContext,
@@ -206,7 +217,6 @@ class SqsProvider(SqsApi):
 
         return CreateQueueResult(QueueUrl=queue.url)
 
-    @handler("GetQueueUrl")
     def get_queue_url(
         self, context: RequestContext, queue_name: String, queue_owner_aws_account_id: String = None
     ) -> GetQueueUrlResult:
@@ -216,9 +226,11 @@ class SqsProvider(SqsApi):
         if key not in self.queues:
             raise QueueDoesNotExist("The specified queue does not exist for this wsdl version.")
 
-        return GetQueueUrlResult(QueueUrl=self.queues[key].url)
+        queue = self.queues[key]
+        self._assert_permission(context, queue)
 
-    @handler("ListQueues")
+        return GetQueueUrlResult(QueueUrl=queue.url)
+
     def list_queues(
         self,
         context: RequestContext,
@@ -247,17 +259,18 @@ class SqsProvider(SqsApi):
 
         return ListQueuesResult(QueueUrls=urls)
 
-    @handler("DeleteQueue")
     def delete_queue(self, context: RequestContext, queue_url: String) -> None:
         with self._mutex:
-            self._require_queue_by_url(queue_url)
-            self._remove_queue_by_url(queue_url)
+            queue = self._require_queue_by_url(queue_url)
+            self._assert_permission(context, queue)
+            del self.queues[queue.key]
+            del self.queue_url_index[queue_url]
 
-    @handler("GetQueueAttributes")
     def get_queue_attributes(
         self, context: RequestContext, queue_url: String, attribute_names: AttributeNameList = None
     ) -> GetQueueAttributesResult:
         queue = self._require_queue_by_url(queue_url)
+        self._assert_permission(context, queue)
 
         if not attribute_names:
             return GetQueueAttributesResult(Attributes=dict())
@@ -277,7 +290,6 @@ class SqsProvider(SqsApi):
 
         return GetQueueAttributesResult(Attributes=result)
 
-    @handler("SendMessage")
     def send_message(
         self,
         context: RequestContext,
@@ -290,6 +302,7 @@ class SqsProvider(SqsApi):
         message_group_id: String = None,  # TODO
     ) -> SendMessageResult:
         queue = self._require_queue_by_url(queue_url)
+        self._assert_permission(context, queue)
 
         # TODO: default message attributes (SenderId, ApproximateFirstReceiveTimestamp, ...)
 
@@ -318,7 +331,6 @@ class SqsProvider(SqsApi):
             MD5OfMessageSystemAttributes=None,  # TODO
         )
 
-    @handler("ReceiveMessage")
     def receive_message(
         self,
         context: RequestContext,
@@ -331,6 +343,7 @@ class SqsProvider(SqsApi):
         receive_request_attempt_id: String = None,
     ) -> ReceiveMessageResult:
         queue = self._require_queue_by_url(queue_url)
+        self._assert_permission(context, queue)
 
         num = max_number_of_messages or 1
         # collect messages
@@ -369,9 +382,9 @@ class SqsProvider(SqsApi):
         # TODO: how does receiving behave if the queue was deleted in the meantime?
         return ReceiveMessageResult(Messages=messages)
 
-    @handler("PurgeQueue")
     def purge_queue(self, context: RequestContext, queue_url: String) -> None:
         queue = self._require_queue_by_url(queue_url)
+        self._assert_permission(context, queue)
 
         with self._mutex:
             # FIXME: use queue-specific locks
@@ -389,7 +402,6 @@ class SqsProvider(SqsApi):
         finally:
             queue.purge_in_progress = False
 
-    @handler("SetQueueAttributes")
     def set_queue_attributes(
         self, context: RequestContext, queue_url: String, attributes: QueueAttributeMap
     ) -> None:
@@ -403,9 +415,9 @@ class SqsProvider(SqsApi):
         for k, v in attributes.items():
             queue.attributes[k] = v
 
-    @handler("TagQueue")
     def tag_queue(self, context: RequestContext, queue_url: String, tags: TagMap) -> None:
         queue = self._require_queue_by_url(queue_url)
+        self._assert_permission(context, queue)
 
         if not tags:
             return
@@ -413,10 +425,47 @@ class SqsProvider(SqsApi):
         for k, v in tags.items():
             queue.tags[k] = v
 
-    @handler("ListQueueTags")
     def list_queue_tags(self, context: RequestContext, queue_url: String) -> ListQueueTagsResult:
         queue = self._require_queue_by_url(queue_url)
+        self._assert_permission(context, queue)
         return ListQueueTagsResult(Tags=queue.tags)
+
+    def untag_queue(self, context: RequestContext, queue_url: String, tag_keys: TagKeyList) -> None:
+        queue = self._require_queue_by_url(queue_url)
+        self._assert_permission(context, queue)
+
+        for k in tag_keys:
+            if k in queue.tags:
+                del queue.tags[k]
+
+    def add_permission(
+        self,
+        context: RequestContext,
+        queue_url: String,
+        label: String,
+        aws_account_ids: AWSAccountIdList,
+        actions: ActionNameList,
+    ) -> None:
+        queue = self._require_queue_by_url(queue_url)
+        self._assert_permission(context, queue)
+
+        self._validate_actions(actions)
+
+        for account_id in aws_account_ids:
+            for action in actions:
+                queue.permissions.add(Permission(label, account_id, action))
+
+    def remove_permission(self, context: RequestContext, queue_url: String, label: String) -> None:
+        queue = self._require_queue_by_url(queue_url)
+        self._assert_permission(context, queue)
+
+        candidate = None
+        for perm in queue.permissions:
+            if perm.label == label:
+                candidate = perm
+                break
+        if candidate:
+            queue.permissions.remove(candidate)
 
     def _create_message_attributes(
         self,
@@ -439,3 +488,34 @@ class SqsProvider(SqsApi):
         for k in attributes.keys():
             if k not in valid:
                 raise InvalidAttributeName("Unknown attribute name %s" % k)
+
+    def _validate_actions(self, actions: ActionNameList):
+        service = load_service(service=self.service, version=self.version)
+        # FIXME: this is a bit of a heuristic as it will also include actions like "ListQueues" which is not
+        #  associated with an action on a queue
+        valid = list(service.operation_names)
+        valid.append("*")
+
+        for action in actions:
+            if action not in valid:
+                raise InvalidParameterValues(
+                    f"Value SQS:{action} for parameter ActionName is invalid. Reason: Please refer to the appropriate "
+                    "WSDL for a list of valid actions. "
+                )
+
+    def _assert_permission(self, context: RequestContext, queue: SqsQueue):
+        action = context.operation.name
+        account_id = context.account_id
+
+        if account_id == queue.owner:
+            return
+
+        for permission in queue.permissions:
+            if permission.account_id != account_id:
+                continue
+            if permission.action == "*":
+                return
+            if permission.action == action:
+                return
+
+        raise CommonServiceException("AccessDeniedException", "Not allowed (TODO: correct message)")
