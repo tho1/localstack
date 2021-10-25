@@ -5,8 +5,8 @@ import random
 import re
 import string
 import threading
-from queue import Empty
-from queue import Queue as FifoQueue
+import time
+from queue import Empty, PriorityQueue
 from typing import Dict, List, NamedTuple, Set
 
 from localstack.aws.api import CommonServiceException, RequestContext
@@ -26,12 +26,14 @@ from localstack.aws.api.sqs import (
     MessageAttributeNameList,
     MessageBodyAttributeMap,
     MessageBodySystemAttributeMap,
+    MessageNotInflight,
     MessageSystemAttributeName,
     PurgeQueueInProgress,
     QueueAttributeMap,
     QueueAttributeName,
     QueueDoesNotExist,
     QueueNameExists,
+    ReceiptHandleIsInvalid,
     ReceiveMessageResult,
     SendMessageResult,
     SqsApi,
@@ -96,7 +98,6 @@ class SqsQueue:
 
     attributes: QueueAttributeMap
     tags: TagMap
-    message: List[Message]
     permissions: Set[Permission]
 
     purge_in_progress: bool
@@ -105,7 +106,6 @@ class SqsQueue:
         super().__init__()
         self.key = key
         self.tags = tags or dict()
-        self.messages = FifoQueue()
 
         self.attributes = self.default_attributes()
         if attributes:
@@ -113,6 +113,7 @@ class SqsQueue:
 
         self.purge_in_progress = False
         self.permissions = set()
+        self._mutex = threading.RLock()
 
     def default_attributes(self) -> QueueAttributeMap:
         return {
@@ -154,6 +155,160 @@ class SqsQueue:
             account_id=self.key.account_id,
             name=self.key.name,
         )
+
+    @property
+    def visibility_timeout(self):
+        return int(self.attributes[QueueAttributeName.VisibilityTimeout])
+
+    def update_visibility_timeout(self, receipt_handle: str, visibility_timeout: int):
+        raise NotImplementedError
+
+    def remove(self, receipt_handle: str):
+        raise NotImplementedError
+
+    def put(self, message: Message, visibility_timeout=None):
+        raise NotImplementedError
+
+    def get(self, block=True, timeout=None) -> Message:
+        raise NotImplementedError
+
+
+class QueuedMessage:
+    message: Message
+    priority: float
+    message_id: str
+    visibility_timeout: int
+    deleted: bool
+    receive_times: int
+    receipt_handles: List[str]
+
+    def __init__(self, priority: float, message: Message) -> None:
+        super().__init__()
+        self.message_id = message["MessageId"]
+        self.priority = priority
+        self.message = message
+        self.deleted = False
+        self.receive_times = 0
+        self.receipt_handles = list()
+
+        self.last_received = None
+        self.first_received = None
+
+    @property
+    def is_visible(self):
+        if self.last_received is None:
+            return True
+        if time.time() >= (self.last_received + self.visibility_timeout):
+            return True
+
+        return False
+
+    def __gt__(self, other):
+        return self.priority > other.priority
+
+    def __ge__(self, other):
+        return self.priority >= other.priority
+
+    def __lt__(self, other):
+        return self.priority < other.priority
+
+    def __le__(self, other):
+        return self.priority <= other.priority
+
+    def __eq__(self, other):
+        self.message_id = other.message_id
+
+    def __hash__(self):
+        return self.message_id.__hash__()
+
+
+class StandardQueue(SqsQueue):
+
+    visible: PriorityQueue
+    inflight: Set[QueuedMessage]
+    receipts: Dict[str, QueuedMessage]
+
+    def __init__(self, key: QueueKey, attributes=None, tags=None) -> None:
+        super().__init__(key, attributes, tags)
+
+        self.visible = PriorityQueue()
+        self.inflight = set()
+        self.receipts = dict()
+
+    def put(self, message: Message, visibility_timeout: int = None):
+        with self._mutex:
+            qm = QueuedMessage(time.time(), message)
+
+            if visibility_timeout is not None:
+                qm.visibility_timeout = visibility_timeout
+            else:
+                # use the attribute from the queue
+                qm.visibility_timeout = self.visibility_timeout
+
+            self.visible.put_nowait(qm)
+
+    def update(self):
+        # TODO: this should be called by a worker that updates queues regularly
+        with self._mutex:
+            messages = list(self.inflight)
+            for qm in messages:
+                if qm.is_visible:
+                    self.inflight.remove(qm)
+                    self.visible.put(qm)
+
+    def get(self, block=True, timeout=None) -> Message:
+        qm: QueuedMessage = self.visible.get(block=block, timeout=timeout)
+
+        with self._mutex:
+            if qm.deleted:
+                pass  # TODO: how should receive-message behave here?
+
+            receipt_handle = generate_receipt_handle()
+
+            # update message
+            qm.receipt_handles.append(receipt_handle)
+            qm.receive_times += 1
+            qm.last_received = time.time()
+            if qm.first_received is None:
+                qm.first_received = qm.last_received
+
+            # update queue state
+            self.receipts[receipt_handle] = qm
+            self.inflight.add(qm)
+
+            # prepare message for receiver
+            # TODO: update message attributes (ApproximateFirstReceiveTimestamp, ApproximateReceiveCount)
+            message = copy.deepcopy(qm.message)
+            message["ReceiptHandle"] = receipt_handle
+
+        return message
+
+    def update_visibility_timeout(self, receipt_handle: str, visibility_timeout: int):
+        with self._mutex:
+            if receipt_handle not in self.receipts:
+                raise ReceiptHandleIsInvalid()
+            qm = self.receipts[receipt_handle]
+
+            if qm not in self.inflight:
+                raise MessageNotInflight()
+
+    def remove(self, receipt_handle: str):
+        with self._mutex:
+            if receipt_handle not in self.inflight:
+                return
+
+            qm = self.receipts[receipt_handle]
+            qm.deleted = True
+
+            # remove all all handles
+            for handle in qm.receipt_handles:
+                del self.receipts[handle]
+
+            # remove in-flight message
+            self.inflight.remove(qm)
+
+            # TODO: remove this message from the visible queue if it exists: a message can be removed with an old
+            #  receipt handle that was issued before the message was put back in the visible queue.
 
 
 class SqsProvider(SqsApi):
@@ -259,6 +414,17 @@ class SqsProvider(SqsApi):
 
         return ListQueuesResult(QueueUrls=urls)
 
+    def change_message_visibility(
+        self,
+        context: RequestContext,
+        queue_url: String,
+        receipt_handle: String,
+        visibility_timeout: Integer,
+    ) -> None:
+
+        queue = self._require_queue_by_url(queue_url)
+        queue.update_visibility_timeout(receipt_handle, visibility_timeout)
+
     def delete_queue(self, context: RequestContext, queue_url: String) -> None:
         with self._mutex:
             queue = self._require_queue_by_url(queue_url)
@@ -319,9 +485,9 @@ class SqsProvider(SqsApi):
         if delay_seconds:
             # FIXME: this is a pretty bad implementation (one thread per message...). polling on a priority queue
             #  would probably be better.
-            threading.Timer(int(delay_seconds), queue.messages.put_nowait, args=(message,)).start()
+            threading.Timer(int(delay_seconds), queue.put, args=(message,)).start()
         else:
-            queue.messages.put_nowait(message)
+            queue.put(message)
 
         return SendMessageResult(
             MessageId=message["MessageId"],
@@ -346,23 +512,15 @@ class SqsProvider(SqsApi):
         self._assert_permission(context, queue)
 
         num = max_number_of_messages or 1
+        block = wait_time_seconds is not None
         # collect messages
         messages = list()
         while num:
-            if wait_time_seconds is None:
-                try:
-                    msg = queue.messages.get_nowait()
-                except Empty:
-                    break
-            else:
-                try:
-                    msg = queue.messages.get(timeout=wait_time_seconds)
-                except Empty:
-                    break
+            try:
+                msg = queue.get(block=block, timeout=wait_time_seconds)
+            except Empty:
+                break
 
-            # prepare message for receipt
-            msg: Message = copy.deepcopy(msg)
-            msg["ReceiptHandle"] = generate_receipt_handle()
             # filter attributes
             if message_attribute_names:
                 if "All" not in message_attribute_names:
@@ -381,6 +539,11 @@ class SqsProvider(SqsApi):
 
         # TODO: how does receiving behave if the queue was deleted in the meantime?
         return ReceiveMessageResult(Messages=messages)
+
+    def delete_message(
+        self, context: RequestContext, queue_url: String, receipt_handle: String
+    ) -> None:
+        pass
 
     def purge_queue(self, context: RequestContext, queue_url: String) -> None:
         queue = self._require_queue_by_url(queue_url)

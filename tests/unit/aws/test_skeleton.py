@@ -1,3 +1,6 @@
+import math
+import threading
+import time
 from typing import Dict, List, TypedDict
 
 from botocore.parsers import create_parser
@@ -211,3 +214,59 @@ def test_skeleton_e2e_sqs_send_message_not_implemented():
         "Code": "InternalFailure",
         "Message": "API action 'SendMessage' for service 'sqs' not yet implemented",
     }
+
+
+class Message:
+    def __init__(self, timestamp, message) -> None:
+        super().__init__()
+        self.timestamp = timestamp
+        self.message = message
+
+    def __gt__(self, other):
+        return self.timestamp > other.timestamp
+
+    def __ge__(self, other):
+        return self.timestamp >= other.timestamp
+
+    def __lt__(self, other):
+        return self.timestamp < other.timestamp
+
+    def __le__(self, other):
+        return self.timestamp <= other.timestamp
+
+
+def test_foo():
+    import queue
+
+    pq = queue.PriorityQueue()
+
+    _quit = Message(math.inf, "__quit__")
+
+    def printem():
+        try:
+            while True:
+                item = pq.get()
+                print("queue item", item.timestamp, item.message)
+
+                if item is _quit:
+                    print("bye!")
+                    return
+
+        except Exception as e:
+            print(e)
+
+    print()
+
+    t = threading.Thread(target=printem)
+
+    pq.put(Message(1, "hello1"))
+    pq.put(Message(3, "hello3"))
+    pq.put(Message(2, "hello2"))
+
+    t.start()
+
+    time.sleep(1)
+
+    pq.put(_quit)
+
+    t.join()
