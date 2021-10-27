@@ -163,6 +163,7 @@ class RequestParser(abc.ABC):
 
 class QueryRequestParser(RequestParser):
     TIMESTAMP_FORMAT = "iso8601"
+    FLATTENED_LIST_PREFIX = "member."
 
     def parse(self, request: HttpRequest) -> Tuple[OperationModel, Any]:
         body = to_str(request["body"])
@@ -194,11 +195,11 @@ class QueryRequestParser(RequestParser):
 
         for member, member_shape in shape.members.items():
             # The key in the node is either the serialization config "name" of the shape, or the name of the member
-            member_name = member_shape.serialization.get("name", member)
+            member_name = self._get_serialized_name(member_shape, member)
             # BUT, if it's flattened and a list, the name is defined by the list's member's name
             if member_shape.serialization.get("flattened"):
                 if isinstance(member_shape, ListShape):
-                    member_name = member_shape.member.serialization.get("name", member)
+                    member_name = self._get_serialized_name(member_shape.member, member)
             value = self._process_member(request, member_name, member_shape, node)
             if value is not None:
                 result[member] = value
@@ -233,8 +234,8 @@ class QueryRequestParser(RequestParser):
             i += 1
             # The key and value can be renamed (with their serialization config's "name").
             # By default they are called "key" and "value".
-            key_name = f"{key_prefix}{i}.{shape.key.serialization.get('name', 'key')}"
-            value_name = f"{key_prefix}{i}.{shape.value.serialization.get('name', 'value')}"
+            key_name = f"{key_prefix}{i}.{self._get_serialized_name(shape.key, 'key')}"
+            value_name = f"{key_prefix}{i}.{self._get_serialized_name(shape.value, 'value')}"
 
             # We process the key and value individually
             k = self._process_member(request, key_name, shape.key, node)
@@ -266,7 +267,7 @@ class QueryRequestParser(RequestParser):
         # https://awslabs.github.io/smithy/1.0/spec/core/xml-traits.html#xmlflattened-trait
         key_prefix = ""
         if not shape.serialization.get("flattened"):
-            key_prefix += "member."
+            key_prefix += self.FLATTENED_LIST_PREFIX
 
         # We collect the list value as well as the integer indicating the list position so we can
         # later sort the list by the position, in case they attribute values are unordered
@@ -282,6 +283,11 @@ class QueryRequestParser(RequestParser):
             result.append((i, value))
 
         return [r[1] for r in sorted(result)] if len(result) > 0 else None
+
+    def _get_serialized_name(self, shape: Shape, default_name: str):
+        # Returns the serialized name for the shape if it exists.
+        # Otherwise it will return the passed in default_name.
+        return shape.serialization.get("name", default_name)
 
 
 class BaseRestRequestParser(RequestParser):
@@ -425,8 +431,8 @@ class RestXMLRequestParser(BaseRestRequestParser):
         parsed = {}
         key_shape = shape.key
         value_shape = shape.value
-        key_location_name = key_shape.serialization.get("name") or "key"
-        value_location_name = value_shape.serialization.get("name") or "value"
+        key_location_name = key_shape.serialization.get("name", "key")
+        value_location_name = value_shape.serialization.get("name", "value")
         if shape.serialization.get("flattened") and not isinstance(node, list):
             node = [node]
         for keyval_node in node:
@@ -613,7 +619,21 @@ class RestJSONRequestParser(BaseRestRequestParser, BaseJSONRequestParser):
 
 
 class EC2RequestParser(QueryRequestParser):
-    pass
+    # The EC2 protocol does not use a prefix notation for flattened lists
+    FLATTENED_LIST_PREFIX = ""
+
+    def _get_serialized_name(self, shape: Shape, default_name: str):
+        # Returns the serialized name for the shape if it exists.
+        # Otherwise it will return the passed in default_name.
+        if "queryName" in shape.serialization:
+            return shape.serialization["queryName"]
+        elif "name" in shape.serialization:
+            # A locationName is always capitalized
+            # on input for the ec2 protocol.
+            name = shape.serialization["name"]
+            return name[0].upper() + name[1:]
+        else:
+            return default_name
 
 
 def create_parser(service: ServiceModel) -> RequestParser:

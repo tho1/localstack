@@ -209,7 +209,7 @@ def _botocore_parser_integration_test(
     serialized_request["method"] = method
     serialized_request["headers"] = headers
 
-    if service.protocol == "query":
+    if service.protocol in ["query", "ec2"]:
         # Serialize the body as query parameter
         serialized_request["body"] = urlencode(serialized_request["body"])
 
