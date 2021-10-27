@@ -36,6 +36,10 @@ def _text_content(func):
     return _get_text_content
 
 
+class RequestParserError(Exception):
+    pass
+
+
 class RequestParser(abc.ABC):
     """Parses a request to an AWS service (OperationModel and Input-Shapes."""
 
@@ -55,28 +59,28 @@ class RequestParser(abc.ABC):
             if location == "header":
                 headers = request.get("headers")
                 location_name = shape.serialization.get("locationName")
-                # TODO implement proper parsing
+                # TODO implement proper parsing from the header field
                 # https://awslabs.github.io/smithy/1.0/spec/core/http-traits.html#httpheader-trait
                 # Attention: This differs from the other protocols!
                 raise NotImplementedError
             elif location == "headers":
                 headers = request.get("headers")
                 location_name = shape.serialization.get("locationName")
-                # TODO implement proper parsing
+                # TODO implement proper parsing from the header fields (prefix)
                 # https://awslabs.github.io/smithy/1.0/spec/core/http-traits.html#httpprefixheaders-trait
                 # Attention: This differs from the other protocols!
                 raise NotImplementedError
             elif location == "querystring":
                 body = to_str(request["body"])
                 location_name = shape.serialization.get("locationName")
-                # TODO implement proper parsing
+                # TODO implement proper parsing from the query string
                 # https://awslabs.github.io/smithy/1.0/spec/core/http-traits.html#httpquery-trait
                 # Attention: This differs from the other protocols, even the Query protocol!
                 raise NotImplementedError
             elif location == "uri":
                 path = to_str(request["path"])
                 location_name = shape.serialization.get("locationName")
-                # TODO implement proper parsing
+                # TODO implement proper parsing from the URI path
                 # https://awslabs.github.io/smithy/1.0/spec/core/http-traits.html#httplabel-trait
                 # Attention: This differs from the other protocols, even the Query protocol!
                 raise NotImplementedError
@@ -306,7 +310,6 @@ class BaseRestRequestParser(RequestParser):
 
     def parse(self, request: HttpRequest) -> Tuple[OperationModel, Any]:
         operation = self.operation_lookup[request["method"]][request["path"]]
-        # TODO extract the request ID generation to the request context
         shape = operation.input_shape
         final_parsed = {}
         self._add_modeled_parse(request, shape, final_parsed)
@@ -326,10 +329,8 @@ class BaseRestRequestParser(RequestParser):
             payload_member_name = shape.serialization["payload"]
             body_shape = member_shapes[payload_member_name]
             if body_shape.serialization.get("eventstream"):
-                # TODO handle event stream messages
-                # body = self._create_event_stream(request, body_shape)
-                # final_parsed[payload_member_name] = body
-                pass
+                body = self._create_event_stream(request, body_shape)
+                final_parsed[payload_member_name] = body
             elif body_shape.type_name in ["string", "blob"]:
                 # This is a stream
                 body = request["body"]
@@ -385,6 +386,10 @@ class BaseRestRequestParser(RequestParser):
         # to convert types, but this method will do the first round
         # of parsing.
         raise NotImplementedError("_initial_body_parse")
+
+    def _create_event_stream(self, request: dict, shape: Shape):
+        # TODO handle event streams
+        raise NotImplementedError("_create_event_stream")
 
 
 class RestXMLRequestParser(BaseRestRequestParser):
@@ -444,9 +449,7 @@ class RestXMLRequestParser(BaseRestRequestParser):
                 elif tag_name == value_location_name:
                     val_name = self._parse_shape(request, value_shape, single_pair)
                 else:
-                    # TODO either log that we suppressed an unknown tag in the request or throw a 4xx error
-                    # raise ResponseParserError("Unknown tag: %s" % tag_name)
-                    pass
+                    raise RequestParserError("Unknown tag: %s" % tag_name)
             parsed[key_name] = val_name
         return parsed
 
@@ -485,12 +488,9 @@ class RestXMLRequestParser(BaseRestRequestParser):
             parser.feed(xml_string)
             root = parser.close()
         except ElementTree.ParseError as e:
-            # TODO raise a specific exception here (client error, request cannot be parsed!)
-            raise Exception()
-            # raise ResponseParserError(
-            #     "Unable to parse response (%s), "
-            #     "invalid XML received. Further retries may succeed:\n%s" %
-            #     (e, xml_string))
+            raise RequestParserError(
+                "Unable to parse request (%s), invalid XML received:\n%s" % (e, xml_string)
+            )
         return root
 
     def _build_name_to_xml_node(self, parent_node):
@@ -533,7 +533,6 @@ class BaseJSONRequestParser(RequestParser):
     TIMESTAMP_FORMAT = "unixtimestamp"
 
     def _parse_structure(self, request, shape, value):
-        final_parsed = {}
         if shape.is_document_type:
             final_parsed = value
         else:
