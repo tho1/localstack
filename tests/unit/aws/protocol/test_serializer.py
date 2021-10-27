@@ -1,3 +1,4 @@
+import copy
 from datetime import datetime
 
 import pytest
@@ -5,17 +6,36 @@ from botocore.parsers import ResponseParser, create_parser
 from dateutil.tz import tzutc
 
 from localstack.aws.api import CommonServiceException, ServiceException
+from localstack.aws.api.sqs import InvalidMessageContents
 from localstack.aws.protocol.serializer import create_serializer
 from localstack.aws.spec import load_service
 
 
-class InvalidMessageContents(ServiceException):
-    pass
-
-
 def _botocore_serializer_integration_test(
-    service: str, action: str, response: dict, status_code=200
+    service: str,
+    action: str,
+    response: dict,
+    status_code=200,
+    expected_response_content: dict = None,
 ):
+    """
+    Performs an integration test for the serializer using botocore as parser.
+    It executes the following steps:
+    - Load the given service (f.e. "sqs")
+    - Serialize the response with the appropriate serializer from the AWS Serivce Framework
+    - Parse the serialized response using the botocore parser
+    - Checks the the metadata is correct (status code, requestID,...)
+    - Checks if the parsed response content is equal to the input to the serializer
+
+    :param service: to load the correct service specification, serializer, and parser
+    :param action: to load the correct service specification, serializer, and parser
+    :param response: which should be serialized and tested against
+    :param status_code: Optional - expected status code of the response - defaults to 200
+    :param expected_response_content: Optional - if the input data ("response") differs from the actually expected data
+                                      (because f.e. it contains None values)
+    :return: None
+    """
+
     # Load the appropriate service
     service = load_service(service)
 
@@ -38,7 +58,9 @@ def _botocore_serializer_integration_test(
     assert "RequestId" in parsed_response["ResponseMetadata"]
     assert len(parsed_response["ResponseMetadata"]["RequestId"]) == 52
     del parsed_response["ResponseMetadata"]
-    assert parsed_response == response
+    if expected_response_content is None:
+        expected_response_content = response
+    assert parsed_response == expected_response_content
 
 
 def _botocore_error_serializer_integration_test(
@@ -49,6 +71,25 @@ def _botocore_error_serializer_integration_test(
     status_code: int,
     message: str,
 ):
+    """
+    Performs an integration test for the error serialization using botocore as parser.
+    It executes the following steps:
+    - Load the given service (f.e. "sqs")
+    - Serialize the _error_ response with the appropriate serializer from the AWS Serivce Framework
+    - Parse the serialized error response using the botocore parser
+    - Checks the the metadata is correct (status code, requestID,...)
+    - Checks if the parsed error response content is correct
+
+    :param service: to load the correct service specification, serializer, and parser
+    :param action: to load the correct service specification, serializer, and parser
+    :param exception: which should be serialized and tested against
+    :param code: expected "code" of the exception (i.e. the AWS specific exception ID, f.e.
+                 "CloudFrontOriginAccessIdentityAlreadyExists")
+    :param status_code: expected HTTP response status code
+    :param message: expected error message
+    :return: None
+    """
+
     # Load the appropriate service
     service = load_service(service)
 
@@ -241,12 +282,6 @@ def test_query_serializer_redshift_with_botocore():
 
 
 def test_query_serializer_sqs_empty_return_shape_with_botocore():
-    # TODO: handle output shapes that are None
-    # this is what an empty response looks like:
-    # <?xml version="1.0"?>
-    # <SetQueueAttributesResponse xmlns="http://queue.amazonaws.com/doc/2012-11-05/">
-    #   <ResponseMetadata><RequestId>139fa091-dc0e-5df3-9823-f97e5bd6469b</RequestId></ResponseMetadata>
-    # </SetQueueAttributesResponse>
     _botocore_serializer_integration_test("sqs", "SetQueueAttributes", {})
 
 
@@ -276,13 +311,29 @@ def test_query_serializer_sqs_flattened_list_map_with_botocore():
             {
                 "MessageId": "ac9baa5c-13b1-4206-aa28-2ac45ae168af",
                 "ReceiptHandle": "AQEBZ14sCjWJuot0T8G2Eg3S8C+sJGg+QRKYCJjfd8iiOsrPfUzbXSjlQquT9NZP1Mxxkcud3HcaxvS7I1gxoM9MSjbpenKgkti8TPCc7nQBUk9y6xXYWlhysjgAi9YjExUIxO2ozYZuwyksOvIxS4NZs2aBctyR74N3XjOO/t8GByAz2u7KR5vYJu418Y9apAuYB1n6ZZ6aE1NrjIK9mjGCKSqE3YxN5SNkKXf1zRwTUjq8cE73F7cK7DBXNFWBTZSYkLLnFg/QuqKh0dfwGgLseeKhHUxw2KiP9qH4kvXBn2UdeI8jkFMbPERiSf2KMrGKyMCtz3jL+YVRYkB4BB0hx15Brrgo/zhePXHbT692VxKF98MIMQc/v+dc6aewQZldjuq6ANrp4RM+LdjlTPg7ow==",
-                "Attributes": None,
                 "MD5OfBody": "13c0c73bbf11056450c43bf3159b3585",
                 "Body": '{"foo": "bared"}',
             }
         ]
     }
     _botocore_serializer_integration_test("sqs", "ReceiveMessage", response)
+
+
+def test_query_serializer_sqs_none_value_in_map():
+    response = {
+        "Messages": [
+            {
+                "MessageId": "ac9baa5c-13b1-4206-aa28-2ac45ae168af",
+                "ReceiptHandle": "AQEBZ14sCjWJuot0T8G2Eg3S8C+sJGg+QRKYCJjfd8iiOsrPfUzbXSjlQquT9NZP1Mxxkcud3HcaxvS7I1gxoM9MSjbpenKgkti8TPCc7nQBUk9y6xXYWlhysjgAi9YjExUIxO2ozYZuwyksOvIxS4NZs2aBctyR74N3XjOO/t8GByAz2u7KR5vYJu418Y9apAuYB1n6ZZ6aE1NrjIK9mjGCKSqE3YxN5SNkKXf1zRwTUjq8cE73F7cK7DBXNFWBTZSYkLLnFg/QuqKh0dfwGgLseeKhHUxw2KiP9qH4kvXBn2UdeI8jkFMbPERiSf2KMrGKyMCtz3jL+YVRYkB4BB0hx15Brrgo/zhePXHbT692VxKF98MIMQc/v+dc6aewQZldjuq6ANrp4RM+LdjlTPg7ow==",
+                "Attributes": None,
+                "MD5OfBody": "13c0c73bbf11056450c43bf3159b3585",
+                "Body": '{"foo": "bared"}',
+            }
+        ]
+    }
+    expected_response = copy.deepcopy(response)
+    del expected_response["Messages"][0]["Attributes"]
+    _botocore_serializer_integration_test("sqs", "ReceiveMessage", response, 200, expected_response)
 
 
 def test_query_protocol_error_serialization():
@@ -557,6 +608,9 @@ def test_ec2_serializer_ec2_with_botocore():
     }
 
     _botocore_serializer_integration_test("ec2", "CreateInstanceEventWindow", parameters)
+
+
+# TODO test error serialization of EC2 (it differs from the query error serialization)
 
 
 # TODO Add additional tests (or even automate the creation)

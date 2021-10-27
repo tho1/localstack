@@ -4,7 +4,7 @@ import calendar
 import datetime
 import json
 from email.utils import formatdate
-from typing import Union
+from typing import Optional, Union
 from xml.etree import ElementTree
 
 import six
@@ -36,12 +36,8 @@ class ResponseSerializer(abc.ABC):
     ) -> HttpResponse:
         serialized_response = self._create_default_response(operation_model)
         shape = operation_model.output_shape
-
-        if shape is None:
-            # TODO: some operations have no output shape (e.g., sqs.SetQueueAttributes)
-            pass
-
-        shape_members = shape.members
+        # The shape can also be none (for empty responses), but it still needs to be serialized to add some metadata
+        shape_members = shape.members if shape is not None else None
         self._serialize_payload(
             response, serialized_response, shape, shape_members, operation_model
         )
@@ -99,7 +95,7 @@ class ResponseSerializer(abc.ABC):
         self,
         parameters: dict,
         serialized: HttpResponse,
-        shape: Shape,
+        shape: Optional[Shape],
         shape_members: dict,
         operation_model: OperationModel,
     ) -> None:
@@ -189,15 +185,15 @@ class BaseXMLResponseSerializer(ResponseSerializer):
         self,
         parameters: dict,
         serialized: HttpResponse,
-        shape: Shape,
+        shape: Optional[Shape],
         shape_members: dict,
         operation_model: OperationModel,
     ) -> None:
         # parameters - The user input params.
         # serialized - The final serialized request dict.
-        # shape - Describes the expected input shape
+        # shape - Describes the expected input shape (can be none in case of an "empty" response)
         # shape_members - The members of the input struct shape
-        payload_member = shape.serialization.get("payload")
+        payload_member = shape.serialization.get("payload") if shape is not None else None
         if payload_member is not None and shape_members[payload_member].type_name in [
             "blob",
             "string",
@@ -270,7 +266,9 @@ class BaseXMLResponseSerializer(ResponseSerializer):
 
     def _serialize_body_params_to_xml(
         self, params: dict, shape: Shape, operation_model: OperationModel
-    ) -> ElementTree.Element:
+    ) -> Optional[ElementTree.Element]:
+        if shape is None:
+            return
         # The botocore serializer expects `shape.serialization["name"]`, but this isn't always present for responses
         root_name = shape.serialization.get("name", shape.name)
         pseudo_root = ElementTree.Element("")
@@ -286,6 +284,8 @@ class BaseXMLResponseSerializer(ResponseSerializer):
     def _serialize(
         self, shape: Shape, params: any, xmlnode: ElementTree.Element, name: str
     ) -> None:
+        if shape is None:
+            return
         # Some output shapes define a `resultWrapper` in their serialization spec.
         # While the name would imply that the result is _wrapped_, it is actually renamed.
         if shape.serialization.get("resultWrapper"):
@@ -394,10 +394,11 @@ class BaseXMLResponseSerializer(ResponseSerializer):
         node = ElementTree.SubElement(xmlnode, name)
         node.text = six.text_type(params)
 
-    def _prepare_additional_traits_in_xml(self, root: ElementTree.Element):
+    def _prepare_additional_traits_in_xml(self, root: Optional[ElementTree.Element]):
         """
         Prepares the XML root node before being serialized with additional traits (like the Response ID in the Query
         protocol).
+        For some protocols (like rest-xml), the root can be None.
         """
         pass
 
@@ -463,11 +464,13 @@ class QueryResponseSerializer(BaseXMLResponseSerializer):
 
         # Create the root element and add the result of the XML serializer as a child node
         root = ElementTree.Element(f"{operation_model.name}Response", attr)
-        root.append(node)
+        if node is not None:
+            root.append(node)
         return root
 
-    def _prepare_additional_traits_in_xml(self, root: ElementTree.Element):
+    def _prepare_additional_traits_in_xml(self, root: Optional[ElementTree.Element]):
         # Add the response metadata here (it's not defined in the specs)
+        # For the ec2 and the query protocol, the root cannot be None at this time.
         response_metadata = ElementTree.SubElement(root, "ResponseMetadata")
         request_id = ElementTree.SubElement(response_metadata, "RequestId")
         request_id.text = gen_amzn_requestid_long()
@@ -507,8 +510,9 @@ class EC2ResponseSerializer(QueryResponseSerializer):
             ElementTree.tostring(root, encoding=self.DEFAULT_ENCODING)
         )
 
-    def _prepare_additional_traits_in_xml(self, root: ElementTree.Element):
+    def _prepare_additional_traits_in_xml(self, root: Optional[ElementTree.Element]):
         # Add the response metadata here (it's not defined in the specs)
+        # For the ec2 and the query protocol, the root cannot be None at this time.
         response_metadata = ElementTree.SubElement(root, "ResponseMetadata")
         request_id = ElementTree.SubElement(response_metadata, "RequestID")
         request_id.text = gen_amzn_requestid_long()
@@ -534,7 +538,7 @@ class JSONResponseSerializer(ResponseSerializer):
         self,
         parameters: dict,
         serialized: HttpResponse,
-        shape: Shape,
+        shape: Optional[Shape],
         shape_members: dict,
         operation_model: OperationModel,
     ) -> None:
@@ -544,9 +548,8 @@ class JSONResponseSerializer(ResponseSerializer):
                 "Content-Type": "application/x-amz-json-%s" % json_version,
             }
         body = {}
-        output_shape = operation_model.output_shape
-        if output_shape is not None:
-            self._serialize(body, parameters, output_shape)
+        if shape is not None:
+            self._serialize(body, parameters, shape)
         serialized["body"] = json.dumps(body).encode(self.DEFAULT_ENCODING)
 
     def _serialize(self, serialized, value, shape, key=None):
