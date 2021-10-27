@@ -506,15 +506,23 @@ class EC2ResponseSerializer(QueryResponseSerializer):
         root = ElementTree.Element("Errors", attr)
         error_tag = ElementTree.SubElement(root, "Error")
         self._add_error_tags(code, error, error_tag, sender_fault)
+        request_id = ElementTree.SubElement(root, "RequestID")
+        request_id.text = gen_amzn_requestid_long()
         serialized["body"] = self._encode_payload(
             ElementTree.tostring(root, encoding=self.DEFAULT_ENCODING)
         )
 
     def _prepare_additional_traits_in_xml(self, root: Optional[ElementTree.Element]):
-        # Add the response metadata here (it's not defined in the specs)
+        # The EC2 protocol does not use the root output shape, therefore we need to remove the hierarchy level
+        # below the root level
+        output_node = root[0]
+        for child in output_node:
+            root.append(child)
+        root.remove(output_node)
+
+        # Add the requestId here (it's not defined in the specs)
         # For the ec2 and the query protocol, the root cannot be None at this time.
-        response_metadata = ElementTree.SubElement(root, "ResponseMetadata")
-        request_id = ElementTree.SubElement(response_metadata, "RequestID")
+        request_id = ElementTree.SubElement(root, "requestId")
         request_id.text = gen_amzn_requestid_long()
 
 

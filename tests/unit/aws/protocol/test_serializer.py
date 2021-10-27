@@ -610,7 +610,18 @@ def test_ec2_serializer_ec2_with_botocore():
     _botocore_serializer_integration_test("ec2", "CreateInstanceEventWindow", parameters)
 
 
-# TODO test error serialization of EC2 (it differs from the query error serialization)
+def test_ec2_protocol_custom_error_serialization():
+    exception = CommonServiceException(
+        "IdempotentParameterMismatch", "Different payload, same token?!"
+    )
+    _botocore_error_serializer_integration_test(
+        "ec2",
+        "StartInstances",
+        exception,
+        "IdempotentParameterMismatch",
+        400,
+        "Different payload, same token?!",
+    )
 
 
 # TODO Add additional tests (or even automate the creation)
