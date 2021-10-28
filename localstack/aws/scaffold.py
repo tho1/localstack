@@ -1,4 +1,5 @@
 import io
+import keyword
 import os
 from typing import Dict, List, Set
 
@@ -18,6 +19,15 @@ from typing_extensions import OrderedDict
 
 from localstack.aws.spec import load_service
 from localstack.utils.common import camel_to_snake_case, mkdir, snake_to_camel_case
+
+
+def to_valid_python_name(spec_name: str) -> str:
+    sanitized = spec_name.replace("-", "_")
+
+    if sanitized in keyword.kwlist:
+        sanitized += "_"
+
+    return sanitized
 
 
 class ShapeNode:
@@ -115,15 +125,17 @@ class ShapeNode:
         elif isinstance(shape, StringShape):
             if shape.enum:
                 code += f"class {shape.name}(str):\n"
-                for v in shape.enum:
-                    k = v.replace("-", "_")  # TODO: create a proper "enum_value_to_token" function
-                    code += f'    {k} = "{v}"\n'
+                for value in shape.enum:
+                    name = to_valid_python_name(value)
+                    code += f'    {name} = "{value}"\n'
                 code += "\n"
             else:
                 code = f"{shape.name} = str"
         elif shape.type_name == "string":
             code = f"{shape.name} = str"
         elif shape.type_name == "integer":
+            code = f"{shape.name} = int"
+        elif shape.type_name == "long":
             code = f"{shape.name} = int"
         elif shape.type_name == "double":
             code = f"{shape.name} = float"
