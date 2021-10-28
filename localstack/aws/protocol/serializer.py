@@ -14,27 +14,29 @@ The different protocols have many similarities. The class hierarchy is
 designed such that the serializers share as much logic as possible.
 The class hierarchy looks as follows:
 ::
-                                                ┌───────────────────┐
-                                                │ResponseSerializer │
-                                                └───────────────────┘
-                                                   ▲      ▲      ▲
-                              ┌────────────────────┘      │      └──────────────────┐
-                 ┌────────────┴────────────┐ ┌────────────┴─────────────┐ ┌─────────┴────────────┐
-                 │BaseXMLResponseSerializer│ │BaseRestResponseSerializer│ │JSONResponseSerializer│
-                 └─────────────────────────┘ └──────────────────────────┘ └──────────────────────┘
-                         ▲      ▲                    ▲           ▲                    ▲
-  ┌──────────────────────┴──┐ ┌─┴────────────────────┴──┐     ┌──┴────────────────────┴──┐
-  │QueryResponseSerializer  │ │RestXMLResponseSerializer│     │RestJSONResponseSerializer│
-  └─────────────────────────┘ └─────────────────────────┘     └──────────────────────────┘
+                                      ┌───────────────────┐
+                                      │ResponseSerializer │
+                                      └───────────────────┘
+                                          ▲    ▲      ▲
+                   ┌──────────────────────┘    │      └──────────────────┐
+      ┌────────────┴────────────┐ ┌────────────┴─────────────┐ ┌─────────┴────────────┐
+      │BaseXMLResponseSerializer│ │BaseRestResponseSerializer│ │JSONResponseSerializer│
+      └─────────────────────────┘ └──────────────────────────┘ └──────────────────────┘
+                         ▲    ▲             ▲             ▲              ▲
+  ┌──────────────────────┴─┐ ┌┴─────────────┴──────────┐ ┌┴──────────────┴──────────┐
+  │QueryResponseSerializer │ │RestXMLResponseSerializer│ │RestJSONResponseSerializer│
+  └────────────────────────┘ └─────────────────────────┘ └──────────────────────────┘
               ▲
    ┌──────────┴──────────┐
    │EC2ResponseSerializer│
    └─────────────────────┘
 ::
 
-The ``ResponseSerializer`` contains the logic that is used among all
-the different protocols (``query``, ``json``, ``rest-json``, ``rest-xml``).
+The ``ResponseSerializer`` contains the logic that is used among all the
+different protocols (``query``, ``json``, ``rest-json``, ``rest-xml``, and
+``ec2``).
 The protocols relate to each other in the following ways:
+
 * The ``query`` and the ``rest-xml`` protocols both have XML bodies in their
   responses which are serialized quite similarly (with some specifics for each
   type).
@@ -48,9 +50,10 @@ The protocols relate to each other in the following ways:
 The serializer classes in this module correspond directly to the different
 protocols. ``#create_serializer`` shows the explicit mapping between the
 classes and the protocols.
-The base classes are structured as follows:
-* The ``ResponseSerializer`` contains all the basic logic for the parsing
-  which is shared among all different protocols.
+The classes are structured as follows:
+
+* The ``ResponseSerializer`` contains all the basic logic for the
+  serialization which is shared among all different protocols.
 * The ``BaseXMLResponseSerializer`` and the ``JSONResponseSerializer``
   contain the logic for the XML and the JSON serialization respectively.
 * The ``BaseRestResponseSerializer`` contains the logic for the REST
@@ -62,15 +65,20 @@ The base classes are structured as follows:
 The services and their protocols are defined by using AWS's Smithy
 (a language to define services in a - somewhat - protocol-agnostic
 way). The "peculiarities" in this serializer code usually correspond
-to certain "traits" in Smithy.
+to certain so-called "traits" in Smithy.
 
-The result of the serialization methods is the HTTP response which can be sent
-back to the calling client.
+The result of the serialization methods is the HTTP response which can
+be sent back to the calling client.
+
+**Experimental:** The serializers in this module are still experimental.
+When implementing services with these serializers, some edge cases might
+not work out-of-the-box.
 """
 import abc
 import base64
 import calendar
 import json
+from abc import ABC
 from datetime import datetime
 from email.utils import formatdate
 from typing import Optional, Union
@@ -94,6 +102,8 @@ class ResponseSerializer(abc.ABC):
     """
 
     DEFAULT_ENCODING = "utf-8"
+    # The default timestamp format is ISO8601, but this can be overwritten by subclasses.
+    TIMESTAMP_FORMAT = "iso8601"
 
     def serialize_to_response(
         self, response: dict, operation_model: OperationModel
@@ -195,7 +205,8 @@ class ResponseSerializer(abc.ABC):
     ) -> None:
         raise NotImplementedError
 
-    def _create_default_response(self, operation_model: OperationModel) -> HttpResponse:
+    @staticmethod
+    def _create_default_response(operation_model: OperationModel) -> HttpResponse:
         """
         Creates a boilerplate default response dict to be used by subclasses as starting points.
         Uses the default HTTP response status code defined in the operation model (if defined).
@@ -209,14 +220,16 @@ class ResponseSerializer(abc.ABC):
 
     # Some extra utility methods subclasses can use.
 
-    def _timestamp_iso8601(self, value: datetime) -> str:
+    @staticmethod
+    def _timestamp_iso8601(value: datetime) -> str:
         if value.microsecond > 0:
             timestamp_format = ISO8601_MICRO
         else:
             timestamp_format = ISO8601
         return value.strftime(timestamp_format)
 
-    def _timestamp_unixtimestamp(self, value: datetime) -> int:
+    @staticmethod
+    def _timestamp_unixtimestamp(value: datetime) -> int:
         return int(calendar.timegm(value.timetuple()))
 
     def _timestamp_rfc822(self, value: datetime) -> str:
@@ -235,7 +248,8 @@ class ResponseSerializer(abc.ABC):
         final_value = converter(datetime_obj)
         return final_value
 
-    def _get_serialized_name(self, shape: Shape, default_name: str) -> str:
+    @staticmethod
+    def _get_serialized_name(shape: Shape, default_name: str) -> str:
         """
         Returns the serialized name for the shape if it exists.
         Otherwise it will return the passed in default_name.
@@ -268,9 +282,10 @@ class BaseXMLResponseSerializer(ResponseSerializer):
     While the botocore's RestXMLSerializer is quite similar, there are some subtle differences (since botocore's
     implementation handles the serialization of the requests from the client to the service, not the responses from the
     service to the client).
-    """
 
-    TIMESTAMP_FORMAT = "iso8601"
+    **Experimental:** This serializer is still experimental.
+    When implementing services with this serializer, some edge cases might not work out-of-the-box.
+    """
 
     def _serialize_payload(
         self,
@@ -282,6 +297,7 @@ class BaseXMLResponseSerializer(ResponseSerializer):
     ) -> None:
         """
         Serializes the given parameters as XML.
+
         :param parameters: The user input params
         :param serialized: The final serialized response dict
         :param shape: Describes the expected output shape (can be None in case of an "empty" response)
@@ -338,8 +354,9 @@ class BaseXMLResponseSerializer(ResponseSerializer):
             ETree.tostring(root, encoding=self.DEFAULT_ENCODING)
         )
 
+    @staticmethod
     def _add_error_tags(
-        self, code: str, error: ServiceException, error_tag: ETree.Element, sender_fault: bool
+        code: str, error: ServiceException, error_tag: ETree.Element, sender_fault: bool
     ) -> None:
         code_tag = ETree.SubElement(error_tag, "Code")
         code_tag.text = code
@@ -470,7 +487,8 @@ class BaseXMLResponseSerializer(ResponseSerializer):
             self._serialize(shape.key, key, entry_node, key_name)
             self._serialize(shape.value, value, entry_node, val_name)
 
-    def _serialize_type_boolean(self, xmlnode: ETree.Element, params: bool, _, name: str) -> None:
+    @staticmethod
+    def _serialize_type_boolean(xmlnode: ETree.Element, params: bool, _, name: str) -> None:
         """
         For scalar types, the 'params' attr is actually just a scalar value representing the data
         we need to serialize as a boolean. It will either be 'true' or 'false'
@@ -496,7 +514,8 @@ class BaseXMLResponseSerializer(ResponseSerializer):
             params, shape.serialization.get("timestampFormat")
         )
 
-    def _default_serialize(self, xmlnode: ETree.Element, params: str, _, name: str) -> None:
+    @staticmethod
+    def _default_serialize(xmlnode: ETree.Element, params: str, _, name: str) -> None:
         node = ETree.SubElement(xmlnode, name)
         node.text = six.text_type(params)
 
@@ -509,7 +528,7 @@ class BaseXMLResponseSerializer(ResponseSerializer):
         pass
 
 
-class BaseRestResponseSerializer(ResponseSerializer):
+class BaseRestResponseSerializer(ResponseSerializer, ABC):
     """
     The BaseRestResponseSerializer performs the basic logic for the ReST response serialization.
     In our case it basically only adds the request metadata to the HTTP header.
@@ -531,6 +550,9 @@ class RestXMLResponseSerializer(BaseRestResponseSerializer, BaseXMLResponseSeria
     It combines the ``BaseRestResponseSerializer`` (for the ReST specific logic) with the ``BaseXMLResponseSerializer``
     (for the XML body response serialization), and adds some minor logic to handle S3 specific peculiarities with the
     error response serialization.
+
+    **Experimental:** This serializer is still experimental.
+    When implementing services with this serializer, some edge cases might not work out-of-the-box.
     """
 
     def _serialize_error(
@@ -566,6 +588,9 @@ class QueryResponseSerializer(BaseXMLResponseSerializer):
     The ``QueryResponseSerializer`` is responsible for the serialization of responses from services which use the
     ``query`` protocol. The responses of these services also use XML, but with a few subtle differences to the
     ``rest-xml`` protocol.
+
+    **Experimental:** This serializer is still experimental.
+    When implementing services with this serializer, some edge cases might not work out-of-the-box.
     """
 
     def _serialize_body_params_to_xml(
@@ -602,6 +627,9 @@ class EC2ResponseSerializer(QueryResponseSerializer):
     The ``EC2ResponseSerializer`` is responsible for the serialization of responses from services which use the
     ``ec2`` protocol (basically the EC2 service). This protocol is basically equal to the ``query`` protocol with only
     a few subtle differences.
+
+    **Experimental:** This serializer is still experimental.
+    When implementing services with this serializer, some edge cases might not work out-of-the-box.
     """
 
     def _serialize_error(
@@ -658,6 +686,9 @@ class JSONResponseSerializer(ResponseSerializer):
     The ``JSONResponseSerializer`` is responsible for the serialization of responses from services with the ``json``
     protocol. It implements the JSON response body serialization, which is also used by the
     ``RestJSONResponseSerializer``.
+
+    **Experimental:** This serializer is still experimental.
+    When implementing services with this serializer, some edge cases might not work out-of-the-box.
     """
 
     TIMESTAMP_FORMAT = "unixtimestamp"
@@ -736,7 +767,8 @@ class JSONResponseSerializer(ResponseSerializer):
             self._serialize(wrapper, list_item, shape.member, "__current__")
             list_obj.append(wrapper["__current__"])
 
-    def _default_serialize(self, body: dict, value: any, _, key: str):
+    @staticmethod
+    def _default_serialize(body: dict, value: any, _, key: str):
         body[key] = value
 
     def _serialize_type_timestamp(self, body: dict, value: any, shape: Shape, key: str):
@@ -761,6 +793,9 @@ class RestJSONResponseSerializer(BaseRestResponseSerializer, JSONResponseSeriali
     ``rest-json`` protocol.
     It combines the ``BaseRestResponseSerializer`` (for the ReST specific logic) with the ``JSONResponseSerializer``
     (for the JSOn body response serialization).
+
+    **Experimental:** This serializer is still experimental.
+    When implementing services with this serializer, some edge cases might not work out-of-the-box.
     """
 
     pass
@@ -769,8 +804,13 @@ class RestJSONResponseSerializer(BaseRestResponseSerializer, JSONResponseSeriali
 def create_serializer(service: ServiceModel) -> ResponseSerializer:
     """
     Creates the right serializer for the given service model.
-    :param service: to create the serializer for.
-    :return: ResponseSerializer which can handle the protocol of the service.
+
+    **Experimental:** The serializers in this module are still experimental.
+    When implementing services with these serializers, some edge cases might
+    not work out-of-the-box.
+
+    :param service: to create the serializer for
+    :return: ResponseSerializer which can handle the protocol of the service
     """
     serializers = {
         "query": QueryResponseSerializer,
